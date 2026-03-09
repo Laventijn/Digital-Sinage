@@ -1,0 +1,45 @@
+
+body {
+  font-family: system-ui, sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+  margin: 0;
+  padding: 0;
+}
+.container {
+  max-width: 960px;
+  margin: auto;
+  padding: 20px;
+}
+.panel {
+  background: #111827;
+  padding: 20px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.3);
+}
+input, select, button {
+  padding: 10px;
+  margin-top: 5px;
+  margin-bottom: 15px;
+  width: 100%;
+  border-radius: 5px;
+  border: 1px solid #333;
+  background: #0b1220;
+  color: #e5e7eb;
+}
+button {
+  background: #22d3ee;
+  color: #000;
+  font-weight: bold;
+  cursor: pointer;
+}
+label {
+  font-weight: bold;
+}
+pre {
+  background: #1f2937;
+  padding: 10px;
+  border-radius: 5px;
+  white-space: pre-wrap;
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Chromium Kiosk zonder cookies
+After=graphical.target display-manager.service
+
+[Service]
+EnvironmentFile=/etc/default/kiosk.conf
+ExecStartPre=/usr/bin/xdotool mousemove 1919 1079
+ExecStart=/usr/bin/chromium-browser   --kiosk "${KioskURL}"   --incognito   --disable-features=CookiesWithoutSameSiteMustBeSecure   --disable-background-networking   --disable-default-apps   --disable-sync   --disable-translate   --disable-popup-blocking   --disable-component-update   --disable-client-side-phishing-detection   --disable-hang-monitor   --disable-prompt-on-repost   --disable-session-crashed-bubble   --disable-infobars   --no-first-run   --noerrdialogs
+
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi/.Xauthority"
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+
+
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=graphical.target
