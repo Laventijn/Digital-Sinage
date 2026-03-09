@@ -1,4 +1,4 @@
-
+VR09032026: originele versie. Wordt overgezet naar Readme.md na verificatie
 README - Installatie Digital Signage Kiosk op Raspberry Pi
 =========================================================
 
@@ -53,3 +53,4 @@ Stap 5: Controle na herstart
 - Je kunt de instellingen aanpassen via de webinterface.
 
 Veel succes!
+
