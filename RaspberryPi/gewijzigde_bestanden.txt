@@ -1,0 +1,158 @@
+2026-03-30 08:40:25.4111199120  /home/pi/.config/chromium/Crash Reports/pending/3439ae71-75d4-47ee-b8b1-4197477c5aff.dmp
+2026-03-30 08:40:25.4311199120  /home/pi/.config/chromium/Crash Reports/pending/3439ae71-75d4-47ee-b8b1-4197477c5aff.meta
+2026-03-30 09:04:03.8288518650  /var/www/html/index.php.bak
+2026-03-30 09:04:03.8888514010  /var/www/html/style.css.bak
+2026-03-30 09:04:03.9388510150  /var/www/html/home.css.bak
+2026-03-30 10:00:40.5185068360  /home/pi/.config/chromium/Crash Reports/pending/ba55a234-c681-4b2e-9a4b-3f948f9ed091.dmp
+2026-03-30 10:00:40.5285068360  /home/pi/.config/chromium/Crash Reports/pending/ba55a234-c681-4b2e-9a4b-3f948f9ed091.meta
+2026-03-30 10:01:02.5385068270  /home/pi/.config/chromium/Default/GCM Store/000301.ldb
+2026-03-30 11:52:03.4062677520  /home/pi/.config/chromium/Crash Reports/pending/0fa53912-c20c-462f-92a1-a455919b46da.dmp
+2026-03-30 11:52:03.4062677520  /home/pi/.config/chromium/Crash Reports/pending/0fa53912-c20c-462f-92a1-a455919b46da.meta
+2026-03-30 12:00:19.5415815620  /home/pi/start_overlay.log
+2026-03-30 15:14:18.2560607600  /etc/default/kiosk-schedule.json
+2026-03-30 15:14:18.3460598550  /usr/local/bin/kiosk-scheduler.py
+2026-03-30 15:48:56.1359177060  /home/pi/Digital-Sinage/kiosk-scheduler.py
+2026-03-30 15:48:56.1659178220  /home/pi/Digital-Sinage/kiosk-scheduler.service
+2026-03-30 15:48:56.2159180160  /etc/systemd/system/kiosk-scheduler.service
+2026-03-31 12:19:56.4432723480  /etc/cups/printers.conf.O
+2026-03-31 15:53:43.9565244530  /var/www/html/offline.php
+2026-03-31 15:54:39.2960783100  /etc/cups/printers.conf
+2026-04-01 09:43:32.8209866330  /etc/systemd/system/kiosk.service
+2026-04-01 10:00:14.0052242710  /home/pi/.config/chromium/Default/GCM Store/000334.ldb
+2026-04-01 11:57:28.9113287730  /var/www/html/style.css
+2026-04-01 11:58:25.1904793370  /var/www/html/home.css
+2026-04-01 11:59:13.6497448690  /home/pi/Digital-Sinage/install_kiosk.sh
+2026-04-01 11:59:58.7290888560  /home/pi/Digital-Sinage/kiosk-sequence.service
+2026-04-01 12:00:56.3682847120  /home/pi/Digital-Sinage/kiosk-update.sh
+2026-04-01 12:01:28.0178583030  /home/pi/Digital-Sinage/kiosk.conf
+2026-04-01 12:02:37.9569503630  /home/pi/Digital-Sinage/refresh_once.sh
+2026-04-01 12:18:22.6786191160  /etc/default/kiosk-presets.json
+2026-04-01 12:19:39.4382058660  /home/pi/.config/chromium/GrShaderCache/data_2
+2026-04-01 12:32:25.6694384000  /etc/systemd/system/kiosk-sequence.service
+2026-04-01 12:32:25.7094385590  /usr/local/bin/kiosk-sequence-watcher.py
+2026-04-01 13:35:35.3979366660  /home/pi/.xsession-errors.old
+2026-04-01 13:35:49.5579359990  /etc/X11/xorg.conf.d/99-v3d.conf
+2026-04-01 13:35:55.0879359970  /etc/resolv.conf
+2026-04-01 13:35:55.4479359970  /home/pi/.local/state/wireplumber/restore-stream
+2026-04-01 13:36:05.5579359930  /home/pi/.cache/menus/2dddb33ebf1bf5d47e063ca679051079
+2026-04-02 10:31:22.0641882630  /etc/cups/subscriptions.conf.O
+2026-04-02 10:31:53.4441882510  /etc/cups/subscriptions.conf
+2026-04-02 10:39:52.7210489100  /var/www/html/index.php
+2026-04-02 10:42:15.7495307610  /var/www/html/sequence.php
+2026-04-02 10:49:28.5756395970  /home/pi/Digital-Sinage/kiosk_sequence_watcher.py
+2026-04-02 10:52:16.9837953660  /home/pi/kiosk_runtime_helpers.php
+2026-04-02 10:52:46.5735002640  /var/www/html/kiosk_runtime_helpers.php
+2026-04-02 10:57:07.2711090280  /home/pi/.config/chromium/Default/shared_proto_db/000607.ldb
+2026-04-02 11:13:14.5437306500  /etc/default/kiosk.conf
+2026-04-02 11:13:17.4037096910  /home/pi/.config/chromium/Default/shared_proto_db/000609.ldb
+2026-04-02 11:35:39.7934238410  /home/pi/.bash_history
+2026-04-02 12:00:03.2743740960  /home/pi/.config/chromium/Default/ClientCertificates/LOG.old
+2026-04-02 12:00:03.2943739560  /home/pi/.config/chromium/Default/commerce_subscription_db/LOG.old
+2026-04-02 12:00:03.2943739560  /home/pi/.config/chromium/Default/discount_infos_db/LOG.old
+2026-04-02 12:00:03.2943739560  /home/pi/.config/chromium/Default/discounts_db/LOG.old
+2026-04-02 12:00:03.2943739560  /home/pi/.config/chromium/Default/LOG.old
+2026-04-02 12:00:03.3143738150  /home/pi/.config/chromium/Default/chrome_cart_db/LOG.old
+2026-04-02 12:00:03.3143738150  /home/pi/.config/chromium/Default/parcel_tracking_db/LOG.old
+2026-04-02 12:00:03.3143738150  /home/pi/.config/chromium/Default/PersistentOriginTrials/LOG.old
+2026-04-02 12:00:03.3143738150  /home/pi/.config/chromium/Default/Segmentation Platform/SegmentInfoDB/LOG.old
+2026-04-02 12:00:03.3343736750  /home/pi/.config/chromium/Default/Segmentation Platform/SignalDB/LOG.old
+2026-04-02 12:00:03.3443736040  /home/pi/.config/chromium/Default/Segmentation Platform/SignalStorageConfigDB/LOG.old
+2026-04-02 12:00:03.3743733940  /home/pi/.config/chromium/Default/Site Characteristics Database/LOG.old
+2026-04-02 12:00:03.3743733940  /home/pi/.config/chromium/Default/Sync Data/LevelDB/LOG.old
+2026-04-02 12:00:03.4743726910  /home/pi/.config/chromium/Default/Local Storage/leveldb/LOG.old
+2026-04-02 12:00:04.2743670690  /home/pi/.config/chromium/Default/shared_proto_db/metadata/000617.ldb
+2026-04-02 12:00:04.3243667180  /home/pi/.config/chromium/Default/shared_proto_db/metadata/LOG.old
+2026-04-02 12:00:04.3443665770  /home/pi/.config/chromium/Default/shared_proto_db/000612.ldb
+2026-04-02 12:00:04.4043661560  /home/pi/.config/chromium/Default/shared_proto_db/LOG.old
+2026-04-02 12:00:04.5243653120  /home/pi/.config/chromium/Default/Extension State/LOG.old
+2026-04-02 12:00:10.9743199720  /home/pi/.config/chromium/Default/GCM Store/LOG.old
+2026-04-02 12:00:11.0343195500  /home/pi/.config/chromium/Default/optimization_guide_hint_cache_store/LOG.old
+2026-04-02 12:00:11.0443194790  /home/pi/.config/chromium/Default/AutofillAiModelCache/LOG.old
+2026-04-02 12:00:11.0543194090  /home/pi/.config/chromium/Default/AutofillStrikeDatabase/LOG.old
+2026-04-02 12:00:11.0543194090  /home/pi/.config/chromium/Default/BudgetDatabase/LOG.old
+2026-04-02 12:00:13.2643038670  /home/pi/.config/chromium/Default/Download Service/EntryDB/LOG.old
+2026-04-02 13:17:02.0383934530  /etc/fake-hwclock.data
+2026-04-02 14:00:01.9570141850  /home/pi/refresh_chromium_log.txt
+2026-04-02 14:00:05.5069960990  /home/pi/.config/chromium/Variations
+2026-04-02 14:00:06.3269919140  /home/pi/.config/chromium/ShaderCache/index
+2026-04-02 14:00:06.3469918110  /home/pi/.config/chromium/Crash Reports/settings.dat
+2026-04-02 14:00:06.3769916580  /home/pi/.config/chromium/Last Version
+2026-04-02 14:00:06.5469907900  /home/pi/.cache/chromium/Default/Code Cache/js/index
+2026-04-02 14:00:06.5469907900  /home/pi/.cache/chromium/Default/Code Cache/js/index-dir/the-real-index
+2026-04-02 14:00:06.5569907390  /home/pi/.cache/chromium/Default/Code Cache/wasm/index
+2026-04-02 14:00:06.5569907390  /home/pi/.cache/chromium/Default/Code Cache/wasm/index-dir/the-real-index
+2026-04-02 14:00:06.5669906880  /home/pi/.config/chromium/Default/Sync Data/LevelDB/000391.log
+2026-04-02 14:00:06.5669906880  /home/pi/.config/chromium/Default/Sync Data/LevelDB/MANIFEST-000390
+2026-04-02 14:00:06.5869905860  /home/pi/.config/chromium/Default/ClientCertificates/LOG
+2026-04-02 14:00:06.6069904830  /home/pi/.config/chromium/Default/Site Characteristics Database/000390.log
+2026-04-02 14:00:06.6069904830  /home/pi/.config/chromium/Default/Site Characteristics Database/MANIFEST-000389
+2026-04-02 14:00:06.6569902280  /home/pi/.config/chromium/Default/Sync Data/LevelDB/CURRENT
+2026-04-02 14:00:06.7169899220  /home/pi/.config/chromium/Default/chrome_cart_db/LOG
+2026-04-02 14:00:06.7169899220  /home/pi/.config/chromium/Default/commerce_subscription_db/LOG
+2026-04-02 14:00:06.7169899220  /home/pi/.config/chromium/Default/discount_infos_db/LOG
+2026-04-02 14:00:06.7169899220  /home/pi/.config/chromium/Default/discounts_db/LOG
+2026-04-02 14:00:06.7169899220  /home/pi/.config/chromium/Default/Local Storage/leveldb/MANIFEST-000527
+2026-04-02 14:00:06.7169899220  /home/pi/.config/chromium/Default/Site Characteristics Database/CURRENT
+2026-04-02 14:00:06.7269898710  /home/pi/.config/chromium/Default/parcel_tracking_db/LOG
+2026-04-02 14:00:06.7369898190  /home/pi/.config/chromium/Default/Sync Data/LevelDB/LOG
+2026-04-02 14:00:06.7569897170  /home/pi/.config/chromium/Default/Segmentation Platform/SegmentInfoDB/LOG
+2026-04-02 14:00:06.7569897170  /home/pi/.config/chromium/Default/Site Characteristics Database/LOG
+2026-04-02 14:00:06.7669896660  /home/pi/.config/chromium/Default/LOG
+2026-04-02 14:00:06.7669896660  /home/pi/.config/chromium/Default/Segmentation Platform/SignalDB/LOG
+2026-04-02 14:00:06.7769896150  /home/pi/.config/chromium/Default/Segmentation Platform/SignalStorageConfigDB/LOG
+2026-04-02 14:00:06.7969895130  /home/pi/.config/chromium/Default/Local Storage/leveldb/CURRENT
+2026-04-02 14:00:06.7969895130  /home/pi/.config/chromium/Default/PersistentOriginTrials/LOG
+2026-04-02 14:00:06.8369893090  /home/pi/.config/chromium/Default/Local Storage/leveldb/LOG
+2026-04-02 14:00:06.8969890020  /home/pi/.cache/dconf/user
+2026-04-02 14:00:07.6169853220  /home/pi/.xsession-errors
+2026-04-02 14:00:07.8169842990  /home/pi/.config/chromium/Default/shared_proto_db/metadata/000619.ldb
+2026-04-02 14:00:07.8369841970  /home/pi/.config/chromium/Default/SCT Auditing Pending Reports
+2026-04-02 14:00:07.8569840950  /home/pi/.cache/chromium/Default/Cache/Cache_Data/index
+2026-04-02 14:00:07.8669840440  /home/pi/.cache/chromium/Default/Cache/No_Vary_Search/journal.baj
+2026-04-02 14:00:07.8669840440  /home/pi/.cache/chromium/Default/Cache/No_Vary_Search/snapshot.baf
+2026-04-02 14:00:07.8669840440  /home/pi/.config/chromium/Default/shared_proto_db/metadata/MANIFEST-000618
+2026-04-02 14:00:07.8869839420  /home/pi/.config/chromium/Default/shared_proto_db/metadata/CURRENT
+2026-04-02 14:00:07.9169837880  /home/pi/.config/chromium/Default/shared_proto_db/metadata/LOG
+2026-04-02 14:00:07.9369836860  /home/pi/.config/chromium/Default/Extension State/000380.log
+2026-04-02 14:00:07.9369836860  /home/pi/.config/chromium/Default/Extension State/MANIFEST-000379
+2026-04-02 14:00:07.9469836350  /home/pi/.config/chromium/Default/shared_proto_db/000615.ldb
+2026-04-02 14:00:07.9669835330  /home/pi/.config/chromium/Default/Extension State/CURRENT
+2026-04-02 14:00:07.9669835330  /home/pi/.config/chromium/Default/shared_proto_db/MANIFEST-000614
+2026-04-02 14:00:07.9769834810  /home/pi/.config/chromium/Default/Extension State/LOG
+2026-04-02 14:00:08.0169832770  /home/pi/.config/chromium/Default/shared_proto_db/CURRENT
+2026-04-02 14:00:08.0369831750  /home/pi/.config/chromium/Default/shared_proto_db/LOG
+2026-04-02 14:00:08.0369831750  /home/pi/.config/chromium/Default/shared_proto_db/metadata/000620.log
+2026-04-02 14:00:08.0769829700  /home/pi/.config/chromium/GrShaderCache/index
+2026-04-02 14:00:08.0969828680  /home/pi/.config/chromium/GraphiteDawnCache/index
+2026-04-02 14:00:08.2269822020  /home/pi/.cache/chromium/Default/Cache/Cache_Data/8a1881ea2a6a87a1_0
+2026-04-02 14:00:08.2469821000  /home/pi/.config/chromium/GrShaderCache/data_0
+2026-04-02 14:00:14.5269498790  /home/pi/.config/chromium/Default/GCM Store/000361.log
+2026-04-02 14:00:14.5269498790  /home/pi/.config/chromium/Default/GCM Store/MANIFEST-000360
+2026-04-02 14:00:14.6269493650  /home/pi/.config/chromium/Default/GCM Store/CURRENT
+2026-04-02 14:00:14.6769491080  /home/pi/.config/chromium/Default/GCM Store/LOG
+2026-04-02 14:00:14.7069489530  /home/pi/.config/chromium/Default/BookmarkMergedSurfaceOrdering
+2026-04-02 14:00:14.7669486440  /home/pi/.config/chromium/Default/AutofillAiModelCache/LOG
+2026-04-02 14:00:14.7669486440  /home/pi/.config/chromium/Default/AutofillStrikeDatabase/LOG
+2026-04-02 14:00:14.7669486440  /home/pi/.config/chromium/Default/optimization_guide_hint_cache_store/LOG
+2026-04-02 14:00:14.7769485930  /home/pi/.config/chromium/Default/BudgetDatabase/LOG
+2026-04-02 14:00:16.2769408680  /home/pi/.config/chromium/Local State
+2026-04-02 14:00:16.5169396310  /home/pi/.config/chromium/Default/Secure Preferences
+2026-04-02 14:00:16.5669393730  /home/pi/.config/chromium/Default/Download Service/EntryDB/LOG
+2026-04-02 14:00:28.2468788490  /home/pi/.cache/chromium/Default/Cache/Cache_Data/index-dir/the-real-index
+2026-04-02 14:00:38.2668264310  /home/pi/.config/chromium/Default/Reporting and NEL
+2026-04-02 14:00:38.2668264310  /home/pi/.config/chromium/Default/Reporting and NEL-journal
+2026-04-02 14:01:06.6166757220  /home/pi/.config/chromium/Default/History-journal
+2026-04-02 14:01:06.8466744850  /home/pi/.config/chromium/Default/Local Storage/leveldb/000529.log
+2026-04-02 14:01:18.2866126870  /home/pi/.config/chromium/Default/Preferences
+2026-04-02 14:01:35.4965187040  /home/pi/.config/chromium/BrowserMetrics-spare.pma
+2026-04-02 14:02:06.3963470190  /home/pi/.config/chromium/segmentation_platform/ukm_db-wal
+2026-04-02 14:02:08.0363378050  /home/pi/.config/chromium/Default/shared_proto_db/000616.log
+2026-04-02 14:04:07.3756422010  /home/pi/.config/chromium/Default/passkey_enclave_state
+2026-04-02 14:07:16.1944584810  /home/pi/.Xauthority
+2026-04-02 14:10:08.2333149040  /home/pi/.config/chromium/Default/TransportSecurity
+2026-04-02 14:14:24.1215368740  /home/pi/.config/chromium/Default/Network Persistent State
+2026-04-02 14:15:06.7512341100  /home/pi/.config/chromium/ShaderCache/data_1
+2026-04-02 14:15:08.1512241420  /home/pi/.config/chromium/GraphiteDawnCache/data_1
+2026-04-02 14:15:08.1512241420  /home/pi/.config/chromium/GrShaderCache/data_1
+2026-04-02 14:15:31.6810563580  /home/pi/check_aangepaste_files.sh
+2026-04-02 14:15:40.5609929250  /home/pi/gewijzigde_bestanden.txt

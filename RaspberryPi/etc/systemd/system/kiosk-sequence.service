@@ -1,0 +1,16 @@
+[Unit]
+Description=Kiosk sequence watcher
+After=graphical.target kiosk.service
+Wants=kiosk.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/kiosk-sequence-watcher.py
+Restart=always
+RestartSec=10
+User=root
+WorkingDirectory=/home/pi
+
+[Install]
+WantedBy=graphical.target
+

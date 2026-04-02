@@ -1,0 +1,36 @@
+[
+    {
+        "name": "google",
+        "url": "https://www.google.com/",
+        "description": "google",
+        "type": "website",
+        "sequence": [
+            {
+                "preset_url": "https://docs.google.com/presentation/d/1cUJkZT8T8xVz6g9N_PrCgHIF7wcKQy1bIRtCutK9z5E/edit?slide=id.g39cb842dacc_1_0#slide=id.g39cb842dacc_1_0",
+                "start_time": "12:10",
+                "stop_time": "12:12"
+            }
+        ],
+        "sequence_key": "google-0075e65b"
+    },
+    {
+        "name": "upper",
+        "url": "https://www.coolblue.be/en/product/961946/msi-vector-17-hx-ai-a2xwhg-052be.html",
+        "description": "",
+        "type": "website",
+        "sequence": [
+            {
+                "preset_url": "https://docs.google.com/presentation/d/1cUJkZT8T8xVz6g9N_PrCgHIF7wcKQy1bIRtCutK9z5E/edit?slide=id.g39cb842dacc_1_0#slide=id.g39cb842dacc_1_0",
+                "start_time": "12:19",
+                "stop_time": "12:23"
+            }
+        ],
+        "sequence_key": "upper-a946275d"
+    },
+    {
+        "name": "vervangrooster",
+        "url": "https://docs.google.com/presentation/d/1cUJkZT8T8xVz6g9N_PrCgHIF7wcKQy1bIRtCutK9z5E/edit?slide=id.g3a9ff8495d4_1_12#slide=id.g3a9ff8495d4_1_12",
+        "description": "",
+        "type": "presentation"
+    }
+]

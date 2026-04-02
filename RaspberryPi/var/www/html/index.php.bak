@@ -1,0 +1,1805 @@
+<?php
+declare(strict_types=1);
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+session_start();
+
+/* =========================================================
+   Basis instellingen
+   ========================================================= */
+$CONFIG_FILE        = '/etc/default/kiosk.conf';
+$PRESETS_FILE       = '/etc/default/kiosk-presets.json';
+$RESTART_AFTER_SAVE = true;
+
+$CMD_RESTART_KIOSK  = 'sudo systemctl restart kiosk.service';
+$CMD_REBOOT_PI      = 'sudo /bin/systemctl reboot';
+$CMD_REFRESH_ONLY   = 'sudo -u pi /home/pi/refresh_once.sh';
+$CMD_SSH_START      = 'sudo systemctl start ssh';
+$CMD_SSH_STOP       = 'sudo systemctl stop ssh';
+$CMD_CLEAR_CACHE    = 'sudo /usr/bin/find /home/pi/.cache/chromium -mindepth 1 -delete';
+
+/* =========================================================
+   Helpers
+   ========================================================= */
+function h(?string $s): string {
+    return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+}
+
+function sh(string $cmd): string {
+    return trim((string)shell_exec($cmd));
+}
+
+function badgeClass(string $status): string {
+    $status = strtolower(trim($status));
+    return match ($status) {
+        'active', 'running', 'up', 'ok' => 'ok',
+        'inactive', 'failed', 'down', 'error' => 'bad',
+        default => 'warn',
+    };
+}
+
+function badgeText(string $status): string {
+    $status = strtolower(trim($status));
+    return match ($status) {
+        'active'   => 'Actief',
+        'inactive' => 'Inactief',
+        'failed'   => 'Fout',
+        'running'  => 'Actief',
+        default    => $status !== '' ? ucfirst($status) : 'Onbekend',
+    };
+}
+
+function boolToString(bool $value): string {
+    return $value ? 'true' : 'false';
+}
+
+function stringToBool(string $value, bool $default = true): bool {
+    $value = strtolower(trim($value));
+    return match ($value) {
+        'true', '1', 'yes', 'on'  => true,
+        'false', '0', 'no', 'off' => false,
+        default                   => $default,
+    };
+}
+
+function looksLikeGoogleSlides(string $url): bool {
+    return (bool)preg_match('~^https?://docs\.google\.com/presentation/d/[a-zA-Z0-9_-]+~i', trim($url));
+}
+
+function buildGoogleSlidesPresentUrl(string $url, bool $slideStart, bool $slideLoop, int $slideDelayMs): string {
+    $url = trim($url);
+
+    if (preg_match('~^https?://docs\.google\.com/presentation/d/([a-zA-Z0-9_-]+)~i', $url, $m)) {
+        $presentationId = $m[1];
+        $params = [
+            'start'   => $slideStart ? 'true' : 'false',
+            'loop'    => $slideLoop ? 'true' : 'false',
+            'delayms' => (string)$slideDelayMs,
+        ];
+        return 'https://docs.google.com/presentation/d/' . $presentationId . '/present?' . http_build_query($params);
+    }
+
+    $url = preg_replace('/([?&])(start|loop|delayms)=[^&]*/i', '', $url);
+    $url = preg_replace('/[?&]+$/', '', $url);
+    $separator = (strpos($url, '?') === false) ? '?' : '&';
+
+    return $url
+        . $separator
+        . 'start=' . ($slideStart ? 'true' : 'false')
+        . '&loop=' . ($slideLoop ? 'true' : 'false')
+        . '&delayms=' . $slideDelayMs;
+}
+
+function normalizeContentUrl(string $type, string $url, bool $slideStart, bool $slideLoop, int $slideSeconds): string {
+    $url = trim($url);
+
+    if ($type === 'presentation') {
+        return buildGoogleSlidesPresentUrl($url, $slideStart, $slideLoop, $slideSeconds * 1000);
+    }
+
+    return $url;
+}
+
+function loadPresets(string $file): array {
+    if (!is_readable($file)) {
+        return [];
+    }
+
+    $json = file_get_contents($file);
+    if ($json === false || trim($json) === '') {
+        return [];
+    }
+
+    $data = json_decode($json, true);
+    if (!is_array($data)) {
+        return [];
+    }
+
+    $presets = [];
+    foreach ($data as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $name = trim((string)($row['name'] ?? ''));
+        $url  = trim((string)($row['url'] ?? ''));
+
+        if ($name === '' || $url === '') {
+            continue;
+        }
+
+        $presets[] = [
+            'name' => $name,
+            'url'  => $url,
+        ];
+    }
+
+    return $presets;
+}
+
+function savePresets(string $file, array $presets): bool {
+    $json = json_encode(array_values($presets), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        return false;
+    }
+
+    return @file_put_contents($file, $json . PHP_EOL) !== false;
+}
+
+function findPresetIndexByUrl(array $presets, string $url): int {
+    foreach ($presets as $i => $preset) {
+        if (trim((string)$preset['url']) === trim($url)) {
+            return (int)$i;
+        }
+    }
+    return -1;
+}
+
+function collectPostedConfig(array $post, array $fallback): array {
+    $type = in_array($post['type'] ?? '', ['website', 'presentation'], true)
+        ? (string)$post['type']
+        : (string)$fallback['type'];
+
+    $url = trim((string)($post['url'] ?? $fallback['url']));
+    $presetUrl = trim((string)($post['preset_url'] ?? ''));
+    if ($presetUrl !== '') {
+        $url = $presetUrl;
+    }
+
+    $slideSeconds = (int)($post['slide_seconds'] ?? $fallback['slide_seconds']);
+    $refreshSeconds = (int)($post['refresh_seconds'] ?? $fallback['refresh_seconds']);
+    $cacheHours = (int)($post['cache_hours'] ?? $fallback['cache_hours']);
+
+    $slideStart = isset($post['slide_start']);
+    $slideLoop = isset($post['slide_loop']);
+
+    $onTime = preg_replace('/[^0-9:]/', '', (string)($post['on_time'] ?? $fallback['on_time']));
+    $offTime = preg_replace('/[^0-9:]/', '', (string)($post['off_time'] ?? $fallback['off_time']));
+
+    if (looksLikeGoogleSlides($url)) {
+        $type = 'presentation';
+    }
+
+    return [
+        'type'            => $type,
+        'url'             => $url,
+        'slide_seconds'   => $slideSeconds,
+        'slide_start'     => $slideStart,
+        'slide_loop'      => $slideLoop,
+        'refresh_seconds' => $refreshSeconds,
+        'cache_hours'     => $cacheHours,
+        'on_time'         => $onTime,
+        'off_time'        => $offTime,
+    ];
+}
+
+function validatePostedConfig(array $cfg): ?string {
+    if (!filter_var($cfg['url'], FILTER_VALIDATE_URL)) {
+        return 'âŒ Ongeldige URL. Vul een volledige URL in, bijvoorbeeld: https://example.com';
+    }
+    if ((int)$cfg['slide_seconds'] < 1 || (int)$cfg['slide_seconds'] > 3600) {
+        return 'âŒ Presentatie timing moet tussen 1 en 3600 seconden liggen.';
+    }
+    if ((int)$cfg['refresh_seconds'] < 0 || (int)$cfg['refresh_seconds'] > 86400) {
+        return 'âŒ Refresh tijd moet tussen 0 en 86400 seconden liggen.';
+    }
+    if ((int)$cfg['cache_hours'] < 0 || (int)$cfg['cache_hours'] > 168) {
+        return 'âŒ Cache interval moet tussen 0 en 168 uur liggen.';
+    }
+    if (($cfg['on_time'] !== '' && !preg_match('/^\d{2}:\d{2}$/', (string)$cfg['on_time'])) ||
+        ($cfg['off_time'] !== '' && !preg_match('/^\d{2}:\d{2}$/', (string)$cfg['off_time']))) {
+        return 'âŒ Start- en stoptijd moeten in formaat UU:MM staan.';
+    }
+    return null;
+}
+
+function writeKioskConfig(string $file, array $cfg): bool {
+    $lines   = [];
+    $lines[] = '# ==========================================';
+    $lines[] = '# Kiosk configuratiebestand';
+    $lines[] = '# ==========================================';
+    $lines[] = '';
+    $lines[] = '# Basis URL';
+    $lines[] = 'KioskURL=' . $cfg['url'];
+    $lines[] = '';
+    $lines[] = '# Google Slides opties';
+    $lines[] = 'SlideStart=' . boolToString((bool)$cfg['slide_start']);
+    $lines[] = 'SlideLoop=' . boolToString((bool)$cfg['slide_loop']);
+    $lines[] = 'SlideDelay=' . ((int)$cfg['slide_seconds'] * 1000);
+    $lines[] = '';
+    $lines[] = '# Refresh instellingen';
+    $lines[] = 'RefreshTime=' . (int)$cfg['refresh_seconds'];
+    $lines[] = 'CacheInterval=' . (int)$cfg['cache_hours'];
+    $lines[] = '';
+    $lines[] = '# Tijdschema (optioneel)';
+    $lines[] = $cfg['on_time'] !== '' ? 'StartTime=' . $cfg['on_time'] : '#StartTime=08:00';
+    $lines[] = $cfg['off_time'] !== '' ? 'StopTime=' . $cfg['off_time'] : '#StopTime=18:00';
+
+    return @file_put_contents($file, implode(PHP_EOL, $lines) . PHP_EOL) !== false;
+}
+
+/* =========================================================
+   CSRF
+   ========================================================= */
+if (empty($_SESSION['csrf'])) {
+    $_SESSION['csrf'] = bin2hex(random_bytes(16));
+}
+$csrf = $_SESSION['csrf'];
+
+/* =========================================================
+   Defaults
+   ========================================================= */
+$defaults = [
+    'type'            => 'website',
+    'url'             => 'http://localhost/',
+    'slide_seconds'   => 10,
+    'slide_start'     => true,
+    'slide_loop'      => true,
+    'refresh_seconds' => 30,
+    'cache_hours'     => 2,
+    'on_time'         => '',
+    'off_time'        => '',
+];
+
+$config = $defaults;
+$PRESETS = loadPresets($PRESETS_FILE);
+
+/* =========================================================
+   Config laden
+   ========================================================= */
+if (is_readable($CONFIG_FILE)) {
+    foreach (file($CONFIG_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+
+        if ($line === '' || str_starts_with($line, '#') || strpos($line, '=') === false) {
+            continue;
+        }
+
+        [$k, $v] = array_map('trim', explode('=', $line, 2));
+
+        switch ($k) {
+            case 'KioskURL':
+                $config['url'] = $v;
+
+                if (looksLikeGoogleSlides($v)) {
+                    $config['type'] = 'presentation';
+                    $parts = parse_url($v);
+
+                    if (!empty($parts['query'])) {
+                        parse_str($parts['query'], $query);
+
+                        if (isset($query['start'])) {
+                            $config['slide_start'] = stringToBool((string)$query['start'], true);
+                        }
+
+                        if (isset($query['loop'])) {
+                            $config['slide_loop'] = stringToBool((string)$query['loop'], true);
+                        }
+
+                        if (isset($query['delayms']) && is_numeric((string)$query['delayms'])) {
+                            $config['slide_seconds'] = max(1, (int)((int)$query['delayms'] / 1000));
+                        }
+                    }
+                }
+                break;
+
+            case 'SlideStart':
+                $config['slide_start'] = stringToBool($v, true);
+                break;
+
+            case 'SlideLoop':
+                $config['slide_loop'] = stringToBool($v, true);
+                break;
+
+            case 'SlideDelay':
+                if (is_numeric($v)) {
+                    $config['slide_seconds'] = max(1, (int)((int)$v / 1000));
+                }
+                break;
+
+            case 'RefreshTime':
+                if (is_numeric($v)) {
+                    $config['refresh_seconds'] = (int)$v;
+                }
+                break;
+
+            case 'CacheInterval':
+                if (is_numeric($v)) {
+                    $config['cache_hours'] = (int)$v;
+                }
+                break;
+
+            case 'StartTime':
+                $config['on_time'] = $v;
+                break;
+
+            case 'StopTime':
+                $config['off_time'] = $v;
+                break;
+        }
+    }
+}
+
+/* =========================================================
+   Huidige systeeminfo
+   ========================================================= */
+$piModel        = @file_exists('/proc/device-tree/model') ? trim((string)file_get_contents('/proc/device-tree/model')) : '';
+$osPretty       = sh("grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"'");
+$arch           = php_uname('m');
+$apache         = sh('apache2 -v | head -n1');
+$chromium       = sh('chromium-browser --version 2>/dev/null || chromium --version 2>/dev/null');
+$phpv           = PHP_VERSION;
+$uptime         = sh('uptime -p 2>/dev/null');
+$ip_eth0        = sh("ip -4 addr show eth0 | awk '/inet / {print $2}' | cut -d/ -f1");
+$ip_wlan0       = sh("ip -4 addr show wlan0 | awk '/inet / {print $2}' | cut -d/ -f1");
+$sshStatus      = sh('systemctl is-active ssh 2>/dev/null');
+$kioskStatus    = sh('systemctl is-active kiosk.service 2>/dev/null');
+$refreshStatus  = sh('systemctl is-active refresh.service 2>/dev/null');
+$hostName       = sh('hostname');
+
+$sshBadgeClass      = badgeClass($sshStatus);
+$sshBadgeText       = badgeText($sshStatus);
+$kioskBadgeClass    = badgeClass($kioskStatus);
+$kioskBadgeText     = badgeText($kioskStatus);
+$refreshBadgeClass  = badgeClass($refreshStatus);
+$refreshBadgeText   = badgeText($refreshStatus);
+
+$networkIp = $ip_wlan0 ?: ($ip_eth0 ?: 'Geen IP beschikbaar');
+
+/* =========================================================
+   Huidige preset bepalen
+   ========================================================= */
+$currentPreset = '';
+foreach ($PRESETS as $preset) {
+    if (trim($config['url']) === trim((string)$preset['url'])) {
+        $currentPreset = (string)$preset['url'];
+        break;
+    }
+}
+
+/* =========================================================
+   Meldingen
+   ========================================================= */
+$notice = '';
+$error  = '';
+$lastAction = '';
+
+$presetManageSelected = '';
+$presetManageName     = '';
+$presetManageUrl      = '';
+
+/* =========================================================
+   Form verwerking
+   ========================================================= */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? 'save';
+    $intentAction = trim((string)($_POST['intent_action'] ?? ''));
+    $presetModePosted = trim((string)($_POST['preset_mode'] ?? ''));
+
+    if ($intentAction === 'preset_commit' && in_array($presetModePosted, ['preset_add', 'preset_update', 'preset_delete'], true)) {
+        $action = $presetModePosted;
+    }
+
+    $lastAction = (string)$action;
+
+    if (!hash_equals($csrf, $_POST['csrf'] ?? '')) {
+        $error = '❌ Ongeldige sessie (CSRF). Herlaad de pagina en probeer opnieuw.';
+    } else {
+        if ($action === 'save') {
+            $draft = collectPostedConfig($_POST, $config);
+            $validationError = validatePostedConfig($draft);
+
+            if ($validationError !== null) {
+                $error = $validationError;
+            } else {
+                $draft['url'] = normalizeContentUrl(
+                    $draft['type'],
+                    $draft['url'],
+                    (bool)$draft['slide_start'],
+                    (bool)$draft['slide_loop'],
+                    (int)$draft['slide_seconds']
+                );
+
+                $config = $draft;
+
+                if (!writeKioskConfig($CONFIG_FILE, $config)) {
+                    $error = "❌ Kon {$CONFIG_FILE} niet schrijven. Controleer permissies.";
+                } else {
+                    if ($RESTART_AFTER_SAVE) {
+                        shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+                        $notice = '✅ Configuratie opgeslagen en kioskservice herstart.';
+                    } else {
+                        $notice = '✅ Configuratie opgeslagen.';
+                    }
+                }
+            }
+        } elseif ($action === 'preset_add') {
+            $preset_name = trim($_POST['preset_name'] ?? '');
+            $preset_url  = trim($_POST['preset_manage_url'] ?? '');
+
+            $presetManageName = $preset_name;
+            $presetManageUrl  = $preset_url;
+
+            if ($preset_name === '' || $preset_url === '') {
+                $error = '❌ Voor een nieuwe preset zijn naam en URL verplicht.';
+            } elseif (!filter_var($preset_url, FILTER_VALIDATE_URL)) {
+                $error = '❌ Ongeldige preset-URL.';
+            } else {
+                $existingIndex = findPresetIndexByUrl($PRESETS, $preset_url);
+
+                if ($existingIndex >= 0) {
+                    $error = '❌ Er bestaat al een preset met deze URL.';
+                } else {
+                    $PRESETS[] = [
+                        'name' => $preset_name,
+                        'url'  => $preset_url,
+                    ];
+
+                    if (savePresets($PRESETS_FILE, $PRESETS)) {
+                        $draft = collectPostedConfig($_POST, $config);
+                        $draft['url'] = $preset_url;
+
+                        if (looksLikeGoogleSlides($draft['url'])) {
+                            $draft['type'] = 'presentation';
+                        }
+
+                        $validationError = validatePostedConfig($draft);
+                        if ($validationError !== null) {
+                            $error = $validationError;
+                        } else {
+                            $draft['url'] = normalizeContentUrl(
+                                $draft['type'],
+                                $draft['url'],
+                                (bool)$draft['slide_start'],
+                                (bool)$draft['slide_loop'],
+                                (int)$draft['slide_seconds']
+                            );
+
+                            $config = $draft;
+
+                            if (!writeKioskConfig($CONFIG_FILE, $config)) {
+                                $error = "❌ Preset toegevoegd, maar kioskconfig kon niet worden toegepast.";
+                            } else {
+                                if ($RESTART_AFTER_SAVE) {
+                                    shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+                                }
+                                $currentPreset = $preset_url;
+                                $presetManageSelected = $preset_url;
+                                $notice = '✅ Nieuwe preset toegevoegd en direct toegepast.';
+                                $presetManageName = '';
+                                $presetManageUrl  = '';
+                            }
+                        }
+                    } else {
+                        $error = '❌ Kon preset-bestand niet opslaan.';
+                    }
+                }
+            }
+        } elseif ($action === 'preset_update') {
+            $selected_url = trim($_POST['selected_preset'] ?? '');
+            $preset_name  = trim($_POST['preset_name'] ?? '');
+            $preset_url   = trim($_POST['preset_manage_url'] ?? '');
+
+            $presetManageSelected = $selected_url;
+            $presetManageName     = $preset_name;
+            $presetManageUrl      = $preset_url;
+
+            if ($selected_url === '') {
+                $error = '❌ Kies eerst een preset om te wijzigen.';
+            } elseif ($preset_name === '' || $preset_url === '') {
+                $error = '❌ Voor wijzigen zijn naam en URL verplicht.';
+            } elseif (!filter_var($preset_url, FILTER_VALIDATE_URL)) {
+                $error = '❌ Ongeldige preset-URL.';
+            } else {
+                $index = findPresetIndexByUrl($PRESETS, $selected_url);
+
+                if ($index < 0) {
+                    $error = '❌ Gekozen preset niet gevonden.';
+                } else {
+                    $PRESETS[$index] = [
+                        'name' => $preset_name,
+                        'url'  => $preset_url,
+                    ];
+
+                    if (savePresets($PRESETS_FILE, $PRESETS)) {
+                        $draft = collectPostedConfig($_POST, $config);
+                        $draft['url'] = $preset_url;
+
+                        if (looksLikeGoogleSlides($draft['url'])) {
+                            $draft['type'] = 'presentation';
+                        }
+
+                        $validationError = validatePostedConfig($draft);
+                        if ($validationError !== null) {
+                            $error = $validationError;
+                        } else {
+                            $draft['url'] = normalizeContentUrl(
+                                $draft['type'],
+                                $draft['url'],
+                                (bool)$draft['slide_start'],
+                                (bool)$draft['slide_loop'],
+                                (int)$draft['slide_seconds']
+                            );
+
+                            $config = $draft;
+
+                            if (!writeKioskConfig($CONFIG_FILE, $config)) {
+                                $error = "❌ Preset gewijzigd, maar kioskconfig kon niet worden toegepast.";
+                            } else {
+                                if ($RESTART_AFTER_SAVE) {
+                                    shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+                                }
+                                $notice = '✅ Preset gewijzigd en direct toegepast.';
+                                $currentPreset = $preset_url;
+                                $presetManageSelected = $preset_url;
+                            }
+                        }
+                    } else {
+                        $error = '❌ Kon preset-bestand niet opslaan.';
+                    }
+                }
+            }
+        } elseif ($action === 'preset_delete') {
+            $selected_url = trim($_POST['selected_preset'] ?? '');
+            $presetManageSelected = $selected_url;
+
+            if ($selected_url === '') {
+                $error = '❌ Kies eerst een preset om te verwijderen.';
+            } else {
+                $index = findPresetIndexByUrl($PRESETS, $selected_url);
+
+                if ($index < 0) {
+                    $error = '❌ Gekozen preset niet gevonden.';
+                } else {
+                    unset($PRESETS[$index]);
+
+                    if (savePresets($PRESETS_FILE, $PRESETS)) {
+                        $PRESETS = array_values($PRESETS);
+                        $notice = '✅ Preset verwijderd.';
+                        $currentPreset = '';
+                        $presetManageSelected = '';
+                        $presetManageName = '';
+                        $presetManageUrl = '';
+                    } else {
+                        $error = '❌ Kon preset-bestand niet opslaan.';
+                    }
+                }
+            }
+        } elseif ($action === 'restart_kiosk') {
+            shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+            $notice = '✅ Kioskservice wordt herstart...';
+        } elseif ($action === 'refresh') {
+            shell_exec($CMD_REFRESH_ONLY . ' > /dev/null 2>&1 &');
+            $notice = '✅ Refresh-script gestart...';
+        } elseif ($action === 'reboot') {
+            shell_exec($CMD_REBOOT_PI . ' > /dev/null 2>&1 &');
+            $notice = '✅ Reboot gestart...';
+        } elseif ($action === 'ssh_start') {
+            shell_exec($CMD_SSH_START . ' > /dev/null 2>&1 &');
+            $notice = '✅ SSH gestart. VS Code Remote SSH kan nu verbinden.';
+        } elseif ($action === 'ssh_stop') {
+            shell_exec($CMD_SSH_STOP . ' > /dev/null 2>&1 &');
+            $notice = '✅ SSH gestopt. VS Code Remote SSH is nu geblokkeerd.';
+        } elseif ($action === 'clear_cache') {
+            shell_exec($CMD_CLEAR_CACHE . ' > /dev/null 2>&1 &');
+            $notice = '✅ Chromium cache wordt leeggemaakt...';
+        }
+    }
+}
+
+/* =========================================================
+   Afgeleide waarden
+   ========================================================= */
+$previewUrl = normalizeContentUrl(
+    $config['type'],
+    $config['url'],
+    (bool)$config['slide_start'],
+    (bool)$config['slide_loop'],
+    (int)$config['slide_seconds']
+);
+
+$currentTypeLabel = $config['type'] === 'presentation' ? 'Google Presentatie' : 'Website';
+$currentModeText  = $config['type'] === 'presentation' ? '🎞️ Presentatiemodus actief' : '🌍 Websitemodus actief';
+?>
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kiosk Configuratie</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="home.css">
+</head>
+<body class="page-home">
+
+<div class="gear-fab-wrap">
+  <button type="button" class="gear-fab" id="gearFab" aria-label="Open beheer dashboard">
+    ⚙️
+    <span class="gear-ip-tooltip" id="gearIpTooltip">
+      IP: <?= h($networkIp) ?>
+    </span>
+  </button>
+</div>
+
+<div class="modal-backdrop" id="beheerModal">
+  <div class="modal-card">
+    <button type="button" class="modal-close" id="closeBeheerModal" aria-label="Sluiten">✕</button>
+
+    <div class="modal-header">
+      <div class="badge">Beheer</div>
+      <div>
+        <h2>⚙️ Beheer Dashboard</h2>
+        <div class="small">Netwerk en technische functies op één plaats</div>
+      </div>
+    </div>
+
+    <div class="dashboard-grid beheer-top-stats">
+      <div class="stat-card">
+        <div class="stat-label">Kiosk service</div>
+        <div class="stat-value"><span class="status-pill <?= h($kioskBadgeClass) ?>"><?= h($kioskBadgeText) ?></span></div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Refresh service</div>
+        <div class="stat-value"><span class="status-pill <?= h($refreshBadgeClass) ?>"><?= h($refreshBadgeText) ?></span></div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">SSH service</div>
+        <div class="stat-value"><span class="status-pill <?= h($sshBadgeClass) ?>"><?= h($sshBadgeText) ?></span></div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Hostname</div>
+        <div class="stat-value"><?= h($hostName ?: 'Onbekend') ?></div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Ethernet IP</div>
+        <div class="stat-value"><?= h($ip_eth0 ?: 'Niet verbonden') ?></div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Wi-Fi IP</div>
+        <div class="stat-value"><?= h($ip_wlan0 ?: 'Niet verbonden') ?></div>
+      </div>
+    </div>
+
+    <div class="modal-grid">
+      <section class="soft-card">
+        <h3 class="subsection-title">📶 Netwerk</h3>
+        <div class="kv-grid">
+          <div class="k">Hostname</div>
+          <div class="v"><?= h($hostName ?: 'Onbekend') ?></div>
+
+          <div class="k">Wi-Fi IP</div>
+          <div class="v"><?= h($ip_wlan0 ?: 'Niet verbonden') ?></div>
+
+          <div class="k">Ethernet IP</div>
+          <div class="v"><?= h($ip_eth0 ?: 'Niet verbonden') ?></div>
+
+          <div class="k">Actief IP</div>
+          <div class="v"><?= h($networkIp) ?></div>
+        </div>
+      </section>
+
+      <section class="soft-card">
+        <h3 class="subsection-title">🧹 Cache & Services</h3>
+        <div class="actions">
+          <button type="submit" form="configForm" name="action" value="clear_cache" class="ghost">🧹 Cache legen</button>
+          <button type="submit" form="configForm" name="action" value="restart_kiosk" class="ghost">🔁 Kiosk herstarten</button>
+          <button type="submit" form="configForm" name="action" value="ssh_start" class="ghost">🔓 SSH starten</button>
+          <button type="submit" form="configForm" name="action" value="ssh_stop" class="ghost">🔒 SSH stoppen</button>
+        </div>
+      </section>
+
+      <section class="soft-card">
+        <h3 class="subsection-title">📡 Wi-Fi instellen</h3>
+        <div class="form-row">
+          <label for="beheer_ssid">SSID</label>
+          <input type="text" id="beheer_ssid" placeholder="Bijvoorbeeld MijnWifi">
+        </div>
+
+        <div class="form-row">
+          <label for="beheer_psk">Wachtwoord</label>
+          <input type="password" id="beheer_psk" placeholder="Wi-Fi wachtwoord">
+        </div>
+
+        <div class="helper">Dit blok is voorbereid voor netwerkbeheer in hetzelfde dashboard.</div>
+      </section>
+
+      <section class="soft-card">
+        <h3 class="subsection-title">📄 Logfiles & info</h3>
+        <div class="form-row">
+          <label for="ict_mail">Mailadres ICT-co</label>
+          <input type="email" id="ict_mail" placeholder="ict@example.be">
+        </div>
+
+        <div class="actions">
+          <button type="button" class="ghost">📄 Logfile bekijken</button>
+          <button type="button" class="ghost">📤 Logfile doorsturen</button>
+        </div>
+
+        <div class="helper">Later kunnen we hier ook debuggegevens en slave logs toevoegen.</div>
+      </section>
+
+      <section class="soft-card soft-card-wide systeminfo-table-card">
+        <h3 class="subsection-title">💻 Systeeminformatie</h3>
+
+        <table class="systeminfo-table">
+          <tr>
+            <th>Raspberry Pi</th>
+            <td><?= h($piModel ?: 'Onbekend') ?></td>
+          </tr>
+          <tr>
+            <th>Besturingssysteem</th>
+            <td><?= h($osPretty ?: php_uname('s')) ?> (<?= h($arch) ?>)</td>
+          </tr>
+          <tr>
+            <th>Apache</th>
+            <td><?= h($apache ?: 'apache2 niet gevonden') ?></td>
+          </tr>
+          <tr>
+            <th>Chromium</th>
+            <td><?= h($chromium ?: 'Chromium niet gevonden') ?></td>
+          </tr>
+          <tr>
+            <th>PHP</th>
+            <td><?= h($phpv) ?></td>
+          </tr>
+          <tr>
+            <th>Uptime</th>
+            <td><?= h($uptime ?: 'n.v.t.') ?></td>
+          </tr>
+        </table>
+
+        <div class="footer-note small">© Valentijn Rombaut 2026</div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<header class="header">
+  <div class="title">
+    <span class="badge">Kiosk</span>
+    <div>
+      <h1>🖥️ Kiosk Configuratie Dashboard</h1>
+      <div class="small">Beheer je Raspberry Pi signage systeem op één plek</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+  <?php if ($notice): ?>
+    <div class="notice flash-message" data-flash><?= h($notice) ?></div>
+  <?php endif; ?>
+
+  <?php if ($error): ?>
+    <div class="error flash-message" data-flash><?= h($error) ?></div>
+  <?php endif; ?>
+
+  <section class="onboarding-card hidden" id="onboardingCard" aria-live="polite">
+    <h2 class="section-title">Snel starten</h2>
+    <div class="small">Gebruik deze 3 stappen om snel iets op het scherm te zetten.</div>
+    <div class="onboarding-steps">
+      <div class="onboarding-step"><strong>1.</strong> Kies een preset of vul een URL in.</div>
+      <div class="onboarding-step"><strong>2.</strong> Controleer refresh en planning.</div>
+      <div class="onboarding-step"><strong>3.</strong> Klik op Opslaan en toepassen.</div>
+    </div>
+    <div class="actions">
+      <button type="button" class="ghost" id="onboardingDismiss">Begrepen</button>
+      <button type="button" class="ghost" id="onboardingHideForever">Niet meer tonen</button>
+    </div>
+  </section>
+
+  <section class="panel highlight">
+    <h2 class="section-title">📊 Echt Dashboard</h2>
+
+    <div class="hero-grid" style="margin-top:16px;">
+      <div class="preview-card">
+        <div class="small"><?= h($currentModeText) ?></div>
+        <h3 style="margin:8px 0 10px 0;">Wat wordt nu getoond</h3>
+        <div><code id="previewUrlTop"><?= h($previewUrl) ?></code></div>
+
+        <div class="preview-meta">
+          <div class="mini">
+            <div class="mini-label">Type</div>
+            <div class="mini-value"><?= h($currentTypeLabel) ?></div>
+          </div>
+          <div class="mini">
+            <div class="mini-label">Refresh</div>
+            <div class="mini-value"><?= (int)$config['refresh_seconds'] ?> sec</div>
+          </div>
+          <div class="mini">
+            <div class="mini-label">Slides</div>
+            <div class="mini-value"><?= (int)$config['slide_seconds'] ?> sec</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="summary-card">
+        <div class="small">Snelle samenvatting</div>
+        <div class="kv-grid" style="margin-top:12px;">
+          <div class="k">Loop</div>
+          <div class="v"><?= $config['slide_loop'] ? 'Ja' : 'Nee' ?></div>
+
+          <div class="k">Start automatisch</div>
+          <div class="v"><?= $config['slide_start'] ? 'Ja' : 'Nee' ?></div>
+
+          <div class="k">Cache legen</div>
+          <div class="v"><?= (int)$config['cache_hours'] ?> uur</div>
+
+          <div class="k">Pi aan</div>
+          <div class="v"><?= h($config['on_time'] !== '' ? $config['on_time'] : 'Niet ingesteld') ?></div>
+
+          <div class="k">Pi uit</div>
+          <div class="v"><?= h($config['off_time'] !== '' ? $config['off_time'] : 'Niet ingesteld') ?></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <form method="post" novalidate id="configForm" data-last-action="<?= h($lastAction) ?>" data-has-error="<?= $error !== '' ? '1' : '0' ?>">
+    <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+    <input type="hidden" id="selected_preset" name="selected_preset" value="<?= h($presetManageSelected !== '' ? $presetManageSelected : $currentPreset) ?>">
+    <input type="hidden" id="preset_manage_url" name="preset_manage_url" value="<?= h($presetManageUrl !== '' ? $presetManageUrl : $config['url']) ?>">
+    <input type="hidden" id="intentAction" name="intent_action" value="">
+    <input type="hidden" id="presetModeInput" name="preset_mode" value="">
+
+    <section class="panel panel-kiosk-builder">
+      <h2 class="section-title">1) Kiosk instellen</h2>
+
+      <div class="wizard-stepper" id="wizardStepper" role="tablist" aria-label="Instelstappen">
+        <button type="button" class="wizard-step active" data-step-target="1" aria-selected="true">1. Inhoud</button>
+        <button type="button" class="wizard-step" data-step-target="2" aria-selected="false">2. Instellingen</button>
+        <button type="button" class="wizard-step" data-step-target="3" aria-selected="false">3. Controle</button>
+      </div>
+
+      <div class="wizard-panel" data-step="1">
+        <div class="kiosk-wire-box">
+          <h3 class="subsection-title">Presets</h3>
+          <div class="small">Stap 1: kies inhoud en beheer presets.</div>
+
+          <div class="kiosk-table-row">
+            <label for="preset_url">Kies preset</label>
+            <select id="preset_url" name="preset_url">
+              <option value="">-- Kies preset --</option>
+              <?php foreach ($PRESETS as $preset): ?>
+                <?php $presetUrl = (string)$preset['url']; ?>
+                <option value="<?= h($presetUrl) ?>" <?= $currentPreset === $presetUrl ? 'selected' : '' ?>>
+                  <?= h((string)$preset['name']) ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+
+          <div class="kiosk-info-grid">
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Toon Soort</div>
+              <div class="kiosk-cell-body" id="currentTypeLabelBox"><?= h($currentTypeLabel) ?></div>
+            </div>
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Toon URL</div>
+              <div class="kiosk-cell-body"><code id="previewUrl"><?= h($previewUrl) ?></code></div>
+            </div>
+            <div class="kiosk-cell" id="slideLoopRow">
+              <label class="checkbox-row">
+                <input type="checkbox" id="slide_loop" name="slide_loop" <?= $config['slide_loop'] ? 'checked' : '' ?>>
+                <span>Loop</span>
+              </label>
+            </div>
+            <div class="kiosk-cell" id="slideRow">
+              <label for="slide_seconds">Volgende slide (sec)</label>
+              <input id="slide_seconds" name="slide_seconds" type="number" min="1" max="3600" value="<?= (int)$config['slide_seconds'] ?>">
+            </div>
+          </div>
+
+          <div class="kiosk-action-line">
+            <span>Of wijzig, voeg toe of verwijder de preset</span>
+            <div class="kiosk-mode-buttons">
+              <button type="button" class="preset-mode-btn mode-add" data-preset-mode="preset_add">toevoegen</button>
+              <button type="button" class="preset-mode-btn mode-update" data-preset-mode="preset_update">wijzigen</button>
+              <button type="button" class="preset-mode-btn mode-delete" data-preset-mode="preset_delete">verwijderen</button>
+            </div>
+            <span class="kiosk-warning hidden" id="presetDeleteWarning">Verwijderen vereist 2 bevestigingen.</span>
+          </div>
+
+          <div class="kiosk-editor hidden" id="presetEditor">
+            <h3 class="subsection-title" id="presetEditorTitle">Preset toevoegen</h3>
+
+            <div class="form-row">
+              <label for="preset_name">Naam</label>
+              <input
+                type="text"
+                id="preset_name"
+                name="preset_name"
+                placeholder="Bijvoorbeeld: School presentatie"
+                value="<?= h($presetManageName) ?>"
+              >
+            </div>
+
+            <div class="kiosk-editor-grid">
+              <div class="form-row">
+                <label for="type_select">Kies Soort</label>
+                <select id="type_select" name="type">
+                  <option value="website" <?= $config['type'] === 'website' ? 'selected' : '' ?>>Website</option>
+                  <option value="presentation" <?= $config['type'] === 'presentation' ? 'selected' : '' ?>>Google Presentatie</option>
+                </select>
+              </div>
+
+              <div class="form-row">
+                <label for="url">URL</label>
+                <input
+                  id="url"
+                  name="url"
+                  type="url"
+                  placeholder="https://voorbeeld.be"
+                  value="<?= h($presetManageUrl !== '' ? $presetManageUrl : $config['url']) ?>"
+                >
+              </div>
+            </div>
+
+            <div class="actions">
+              <button type="button" class="ghost" id="testUrl">Test eind-URL</button>
+              <button type="submit" class="primary-btn" id="presetCommitBtn" name="action" value="preset_add">toevoegen</button>
+              <button type="button" class="ghost" id="cancelPresetMode">annuleren</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wizard-panel hidden" data-step="2">
+        <div class="kiosk-wire-box">
+          <h3 class="subsection-title">Instellingen raspberry PI</h3>
+          <div class="small">Stap 2: stel timing en dagplanning in.</div>
+
+          <div class="kiosk-settings-grid">
+            <div class="form-row">
+              <label for="refresh_seconds">Automatisch verversen (seconden)</label>
+              <input id="refresh_seconds" name="refresh_seconds" type="number" min="0" max="86400" value="<?= (int)$config['refresh_seconds'] ?>">
+            </div>
+
+            <div class="form-row">
+              <label for="cache_hours">Cache legen om de hoeveel uur</label>
+              <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" value="<?= (int)$config['cache_hours'] ?>">
+            </div>
+
+            <div class="form-row">
+              <label for="on_time">Pi aan om (UU:MM)</label>
+              <input id="on_time" name="on_time" type="time" value="<?= h($config['on_time']) ?>">
+            </div>
+
+            <div class="form-row">
+              <label for="off_time">Pi uit om (UU:MM)</label>
+              <input id="off_time" name="off_time" type="time" value="<?= h($config['off_time']) ?>">
+            </div>
+          </div>
+
+          <div class="kiosk-start-row" id="slideStartRow">
+            <label class="checkbox-row">
+              <input type="checkbox" id="slide_start" name="slide_start" <?= $config['slide_start'] ? 'checked' : '' ?>>
+              <span>Start automatisch (alleen voor presentaties)</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="wizard-panel hidden" data-step="3">
+        <div class="kiosk-wire-box">
+          <h3 class="subsection-title">Controle & toepassen</h3>
+          <div class="small">Stap 3: controleer alles en klik daarna op toepassen.</div>
+
+          <div class="wizard-summary-grid">
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Type</div>
+              <div class="kiosk-cell-body" id="summaryType"><?= h($currentTypeLabel) ?></div>
+            </div>
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">URL</div>
+              <div class="kiosk-cell-body"><code id="summaryUrl"><?= h($previewUrl) ?></code></div>
+            </div>
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Refresh</div>
+              <div class="kiosk-cell-body" id="summaryRefresh"><?= (int)$config['refresh_seconds'] ?> sec</div>
+            </div>
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Cache</div>
+              <div class="kiosk-cell-body" id="summaryCache"><?= (int)$config['cache_hours'] ?> uur</div>
+            </div>
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Pi aan</div>
+              <div class="kiosk-cell-body" id="summaryOnTime"><?= h($config['on_time'] !== '' ? $config['on_time'] : 'Niet ingesteld') ?></div>
+            </div>
+            <div class="kiosk-cell">
+              <div class="kiosk-cell-head">Pi uit</div>
+              <div class="kiosk-cell-body" id="summaryOffTime"><?= h($config['off_time'] !== '' ? $config['off_time'] : 'Niet ingesteld') ?></div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button type="submit" id="saveBtn" class="save-main" name="action" value="save">Opslaan en toepassen</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="wizard-nav">
+        <button type="button" class="ghost" id="wizardPrev">Vorige stap</button>
+        <button type="button" class="ghost" id="wizardNext">Volgende stap</button>
+      </div>
+    </section>
+  </form>
+
+</main>
+
+<script>
+(function () {
+  const WIZARD_MIN_STEP = 1;
+  const WIZARD_MAX_STEP = 3;
+  const DELETE_WAIT_SECONDS = 3;
+  const ONBOARDING_STORAGE_KEY = 'kiosk_onboarding_hidden_v1';
+
+  const form = document.getElementById('configForm');
+  const flashMessages = document.querySelectorAll('[data-flash]');
+  const onboardingCard = document.getElementById('onboardingCard');
+  const onboardingDismissBtn = document.getElementById('onboardingDismiss');
+  const onboardingHideForeverBtn = document.getElementById('onboardingHideForever');
+
+  const wizardPanels = document.querySelectorAll('.wizard-panel');
+  const wizardStepButtons = document.querySelectorAll('.wizard-step');
+  const wizardPrevBtn = document.getElementById('wizardPrev');
+  const wizardNextBtn = document.getElementById('wizardNext');
+
+  const typeSelect = document.getElementById('type_select');
+  const urlInput = document.getElementById('url');
+  const slideInput = document.getElementById('slide_seconds');
+  const slideStartInput = document.getElementById('slide_start');
+  const slideLoopInput = document.getElementById('slide_loop');
+  const onTimeInput = document.getElementById('on_time');
+  const offTimeInput = document.getElementById('off_time');
+  const slideRow = document.getElementById('slideRow');
+  const slideStartRow = document.getElementById('slideStartRow');
+  const slideLoopRow = document.getElementById('slideLoopRow');
+  const refreshInput = document.getElementById('refresh_seconds');
+  const cacheInput = document.getElementById('cache_hours');
+
+  const testBtn = document.getElementById('testUrl');
+  const previewUrlEl = document.getElementById('previewUrl');
+  const previewUrlTopEl = document.getElementById('previewUrlTop');
+  const currentTypeLabelBox = document.getElementById('currentTypeLabelBox');
+
+  const presetSelect = document.getElementById('preset_url');
+  const selectedPresetInput = document.getElementById('selected_preset');
+  const presetNameInput = document.getElementById('preset_name');
+  const presetManageUrlInput = document.getElementById('preset_manage_url');
+  const intentActionInput = document.getElementById('intentAction');
+  const presetModeInput = document.getElementById('presetModeInput');
+
+  const summaryTypeEl = document.getElementById('summaryType');
+  const summaryUrlEl = document.getElementById('summaryUrl');
+  const summaryRefreshEl = document.getElementById('summaryRefresh');
+  const summaryCacheEl = document.getElementById('summaryCache');
+  const summaryOnTimeEl = document.getElementById('summaryOnTime');
+  const summaryOffTimeEl = document.getElementById('summaryOffTime');
+
+  const saveBtn = document.getElementById('saveBtn');
+  const presetEditor = document.getElementById('presetEditor');
+  const presetEditorTitle = document.getElementById('presetEditorTitle');
+  const presetCommitBtn = document.getElementById('presetCommitBtn');
+  const cancelPresetModeBtn = document.getElementById('cancelPresetMode');
+  const presetDeleteWarning = document.getElementById('presetDeleteWarning');
+  const presetModeButtons = document.querySelectorAll('[data-preset-mode]');
+
+  const gearFab = document.getElementById('gearFab');
+  const beheerModal = document.getElementById('beheerModal');
+  const closeBeheerModal = document.getElementById('closeBeheerModal');
+
+  let previewWindow = null;
+  let autoCloseTimer = null;
+  let currentPresetMode = '';
+  let currentWizardStep = 1;
+  let deleteConfirmArmed = false;
+  let deleteConfirmSecondsLeft = 0;
+  let deleteConfirmTimer = null;
+
+  const presetMap = {
+<?php
+$presetJs = [];
+foreach ($PRESETS as $preset) {
+    $u = json_encode((string)$preset['url'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $n = json_encode((string)$preset['name'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $presetJs[] = "    {$u}: { name: {$n}, url: {$u} }";
+}
+echo implode(",\n", $presetJs);
+?>
+
+  };
+
+  const presetModeConfig = {
+    preset_add: { title: 'Preset toevoegen', submit: 'toevoegen' },
+    preset_update: { title: 'Preset wijzigen', submit: 'wijzigen' },
+    preset_delete: { title: 'Preset verwijderen', submit: 'verwijderen' }
+  };
+
+  function formatTimeOrDefault(value) {
+    return value && value.trim() !== '' ? value : 'Niet ingesteld';
+  }
+
+  function clampStep(step) {
+    return Math.max(WIZARD_MIN_STEP, Math.min(WIZARD_MAX_STEP, step));
+  }
+
+  function updateWizardControls() {
+    if (wizardPrevBtn) {
+      wizardPrevBtn.disabled = currentWizardStep <= WIZARD_MIN_STEP;
+    }
+
+    if (wizardNextBtn) {
+      wizardNextBtn.disabled = currentWizardStep >= WIZARD_MAX_STEP;
+    }
+  }
+
+  function setWizardStep(step) {
+    currentWizardStep = clampStep(step);
+
+    wizardPanels.forEach((panel) => {
+      const panelStep = parseInt(panel.dataset.step || '1', 10);
+      const active = panelStep === currentWizardStep;
+
+      panel.classList.toggle('hidden', !active);
+
+      if (active) {
+        panel.classList.remove('wizard-panel-enter');
+        void panel.offsetWidth;
+        panel.classList.add('wizard-panel-enter');
+      }
+    });
+
+    wizardStepButtons.forEach((button) => {
+      const buttonStep = parseInt(button.dataset.stepTarget || '1', 10);
+      const active = buttonStep === currentWizardStep;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
+    updateWizardControls();
+    updateSummary();
+  }
+
+  function hideOnboarding(savePreference) {
+    if (onboardingCard) {
+      onboardingCard.classList.add('hidden');
+    }
+
+    if (savePreference) {
+      try {
+        localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
+      } catch (error) {
+        // Ignore localStorage errors on kiosk browsers.
+      }
+    }
+  }
+
+  function initOnboarding() {
+    if (!onboardingCard) {
+      return;
+    }
+
+    let hiddenForever = false;
+    try {
+      hiddenForever = localStorage.getItem(ONBOARDING_STORAGE_KEY) === '1';
+    } catch (error) {
+      hiddenForever = false;
+    }
+
+    onboardingCard.classList.toggle('hidden', hiddenForever);
+
+    if (onboardingDismissBtn) {
+      onboardingDismissBtn.addEventListener('click', function () {
+        hideOnboarding(false);
+      });
+    }
+
+    if (onboardingHideForeverBtn) {
+      onboardingHideForeverBtn.addEventListener('click', function () {
+        hideOnboarding(true);
+      });
+    }
+  }
+
+  function initFlashMessages() {
+    flashMessages.forEach((message) => {
+      setTimeout(() => {
+        message.classList.add('flash-out');
+      }, 6500);
+    });
+  }
+
+  function ensureHttp(url) {
+    if (!url) return '';
+    if (!/^https?:\/\//i.test(url)) {
+      return 'https://' + url;
+    }
+    return url;
+  }
+
+  function isGoogleSlidesUrl(url) {
+    return /^https?:\/\/docs\.google\.com\/presentation\/d\/[a-zA-Z0-9_-]+/i.test(url.trim());
+  }
+
+  function getSelectedType() {
+    return typeSelect ? typeSelect.value : 'website';
+  }
+
+  function setType(type) {
+    if (typeSelect) {
+      typeSelect.value = type;
+    }
+  }
+
+  function getTypeLabel(type) {
+    return type === 'presentation' ? 'Google Presentatie' : 'Website';
+  }
+
+  function stopDeleteCountdown() {
+    if (deleteConfirmTimer) {
+      clearInterval(deleteConfirmTimer);
+      deleteConfirmTimer = null;
+    }
+  }
+
+  function resetDeleteConfirmation() {
+    stopDeleteCountdown();
+    deleteConfirmArmed = false;
+    deleteConfirmSecondsLeft = 0;
+
+    if (currentPresetMode === 'preset_delete' && presetModeConfig.preset_delete && presetCommitBtn) {
+      presetCommitBtn.textContent = presetModeConfig.preset_delete.submit;
+      presetCommitBtn.disabled = false;
+    }
+
+    if (presetDeleteWarning) {
+      presetDeleteWarning.textContent = 'Verwijderen vereist 2 bevestigingen.';
+      presetDeleteWarning.classList.toggle('hidden', currentPresetMode !== 'preset_delete');
+    }
+  }
+
+  function beginDeleteConfirmation() {
+    if (currentPresetMode !== 'preset_delete' || !presetCommitBtn) {
+      return;
+    }
+
+    if (deleteConfirmArmed || deleteConfirmTimer) {
+      return;
+    }
+
+    deleteConfirmSecondsLeft = DELETE_WAIT_SECONDS;
+    presetCommitBtn.disabled = true;
+
+    if (presetDeleteWarning) {
+      presetDeleteWarning.classList.remove('hidden');
+      presetDeleteWarning.textContent = `Wacht ${deleteConfirmSecondsLeft} sec voor bevestiging...`;
+    }
+
+    deleteConfirmTimer = setInterval(() => {
+      deleteConfirmSecondsLeft -= 1;
+
+      if (deleteConfirmSecondsLeft > 0) {
+        if (presetDeleteWarning) {
+          presetDeleteWarning.textContent = `Wacht ${deleteConfirmSecondsLeft} sec voor bevestiging...`;
+        }
+        return;
+      }
+
+      stopDeleteCountdown();
+      deleteConfirmArmed = true;
+      presetCommitBtn.disabled = false;
+      presetCommitBtn.textContent = 'definitief verwijderen';
+
+      if (presetDeleteWarning) {
+        presetDeleteWarning.textContent = 'Klik nu nogmaals op definitief verwijderen.';
+      }
+    }, 1000);
+  }
+
+  function setPresetEditorLock(locked) {
+    if (presetNameInput) presetNameInput.readOnly = locked;
+    if (urlInput) urlInput.readOnly = locked;
+    if (typeSelect) typeSelect.disabled = locked;
+  }
+
+  function syncHiddenPresetFields() {
+    if (selectedPresetInput && presetSelect) {
+      selectedPresetInput.value = presetSelect.value;
+    }
+
+    if (presetManageUrlInput && urlInput) {
+      presetManageUrlInput.value = ensureHttp(urlInput.value.trim());
+    }
+  }
+
+  function buildFinalUrl() {
+    if (!urlInput) return '';
+
+    const rawUrl = ensureHttp(urlInput.value.trim());
+    const type = getSelectedType();
+    const slideSeconds = Math.max(1, parseInt(slideInput.value || '10', 10));
+    const start = slideStartInput.checked;
+    const loop = slideLoopInput.checked;
+
+    if (!rawUrl) return '';
+
+    if (type === 'presentation' && isGoogleSlidesUrl(rawUrl)) {
+      const match = rawUrl.match(/^https?:\/\/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9_-]+)/i);
+      if (match) {
+        const id = match[1];
+        const params = new URLSearchParams({
+          start: start ? 'true' : 'false',
+          loop: loop ? 'true' : 'false',
+          delayms: String(slideSeconds * 1000)
+        });
+        return 'https://docs.google.com/presentation/d/' + id + '/present?' + params.toString();
+      }
+    }
+
+    if (type === 'presentation') {
+      let cleaned = rawUrl
+        .replace(/([?&])(start|loop|delayms)=[^&]*/gi, '')
+        .replace(/[?&]+$/, '');
+
+      const sep = cleaned.includes('?') ? '&' : '?';
+      return cleaned + sep
+        + 'start=' + (start ? 'true' : 'false')
+        + '&loop=' + (loop ? 'true' : 'false')
+        + '&delayms=' + (slideSeconds * 1000);
+    }
+
+    return rawUrl;
+  }
+
+  function updatePresentationFields() {
+    const isPresentation = getSelectedType() === 'presentation';
+
+    slideInput.disabled = !isPresentation;
+    slideStartInput.disabled = !isPresentation;
+    slideLoopInput.disabled = !isPresentation;
+
+    if (slideRow) slideRow.style.opacity = isPresentation ? '1' : '.55';
+    if (slideStartRow) slideStartRow.style.opacity = isPresentation ? '1' : '.55';
+    if (slideLoopRow) slideLoopRow.style.opacity = isPresentation ? '1' : '.55';
+  }
+
+  function autoDetectType() {
+    if (!urlInput) return;
+
+    const url = ensureHttp(urlInput.value.trim());
+    if (isGoogleSlidesUrl(url)) {
+      setType('presentation');
+    }
+  }
+
+  function fillEditorFromSelectedPreset() {
+    if (!presetSelect) return;
+
+    const selected = presetMap[presetSelect.value];
+    if (!selected) {
+      return;
+    }
+
+    if (presetNameInput) presetNameInput.value = selected.name;
+    if (urlInput) urlInput.value = selected.url;
+    setType(isGoogleSlidesUrl(selected.url) ? 'presentation' : 'website');
+  }
+
+  function setPresetMode(mode) {
+    const config = presetModeConfig[mode];
+    if (!config || !presetEditor || !presetCommitBtn || !presetEditorTitle) {
+      return;
+    }
+
+    if ((mode === 'preset_update' || mode === 'preset_delete') && (!presetSelect || !presetSelect.value)) {
+      alert('Kies eerst een preset.');
+      return;
+    }
+
+    currentPresetMode = mode;
+    if (presetModeInput) {
+      presetModeInput.value = mode;
+    }
+    presetEditor.classList.remove('hidden');
+    presetEditorTitle.textContent = config.title;
+    presetCommitBtn.textContent = config.submit;
+    presetCommitBtn.value = mode;
+
+    if (mode !== 'preset_add') {
+      fillEditorFromSelectedPreset();
+    }
+
+    const isDelete = mode === 'preset_delete';
+    setPresetEditorLock(isDelete);
+    resetDeleteConfirmation();
+
+    if (presetDeleteWarning) {
+      presetDeleteWarning.classList.toggle('hidden', !isDelete);
+    }
+
+    presetModeButtons.forEach((button) => {
+      button.classList.toggle('active', button.dataset.presetMode === mode);
+    });
+
+    syncHiddenPresetFields();
+    updatePreview();
+  }
+
+  function clearPresetMode() {
+    currentPresetMode = '';
+    if (presetModeInput) {
+      presetModeInput.value = '';
+    }
+
+    if (presetEditor) {
+      presetEditor.classList.add('hidden');
+    }
+
+    if (presetDeleteWarning) {
+      presetDeleteWarning.classList.add('hidden');
+    }
+
+    presetModeButtons.forEach((button) => {
+      button.classList.remove('active');
+    });
+
+    setPresetEditorLock(false);
+    resetDeleteConfirmation();
+  }
+
+  function resolveSubmitter(event) {
+    if (event.submitter) {
+      return event.submitter;
+    }
+
+    const activeElement = document.activeElement;
+    if (!activeElement) {
+      return null;
+    }
+
+    const tag = activeElement.tagName;
+    if ((tag === 'BUTTON' || tag === 'INPUT') && activeElement.type === 'submit') {
+      return activeElement;
+    }
+
+    return null;
+  }
+
+  function isPresetEditorOpen() {
+    return !!(presetEditor && !presetEditor.classList.contains('hidden') && currentPresetMode);
+  }
+
+  function markPresetIntent() {
+    if (!currentPresetMode) {
+      return;
+    }
+
+    if (intentActionInput) intentActionInput.value = 'preset_commit';
+    if (presetModeInput) presetModeInput.value = currentPresetMode;
+  }
+
+  function markSaveIntent() {
+    if (intentActionInput) intentActionInput.value = 'save_commit';
+    if (presetModeInput) presetModeInput.value = '';
+  }
+
+  function updateSummary() {
+    const finalUrl = buildFinalUrl();
+    const selectedType = getSelectedType();
+    const refreshValue = refreshInput ? parseInt(refreshInput.value || '0', 10) : 0;
+    const cacheValue = cacheInput ? parseInt(cacheInput.value || '0', 10) : 0;
+    const onTimeValue = onTimeInput ? onTimeInput.value : '';
+    const offTimeValue = offTimeInput ? offTimeInput.value : '';
+
+    if (summaryTypeEl) summaryTypeEl.textContent = getTypeLabel(selectedType);
+    if (summaryUrlEl) summaryUrlEl.textContent = finalUrl || 'Nog geen geldige URL ingevuld';
+    if (summaryRefreshEl) summaryRefreshEl.textContent = `${refreshValue} sec`;
+    if (summaryCacheEl) summaryCacheEl.textContent = `${cacheValue} uur`;
+    if (summaryOnTimeEl) summaryOnTimeEl.textContent = formatTimeOrDefault(onTimeValue);
+    if (summaryOffTimeEl) summaryOffTimeEl.textContent = formatTimeOrDefault(offTimeValue);
+  }
+
+  function updatePreview() {
+    autoDetectType();
+    updatePresentationFields();
+    syncHiddenPresetFields();
+
+    const finalUrl = buildFinalUrl();
+    const text = finalUrl || 'Nog geen geldige URL ingevuld';
+    const selectedType = getSelectedType();
+
+    if (previewUrlEl) previewUrlEl.textContent = text;
+    if (previewUrlTopEl) previewUrlTopEl.textContent = text;
+    if (currentTypeLabelBox) currentTypeLabelBox.textContent = getTypeLabel(selectedType);
+    updateSummary();
+  }
+
+  function openBeheerModal() {
+    if (!beheerModal) return;
+
+    beheerModal.classList.add('open');
+
+    if (autoCloseTimer) {
+      clearTimeout(autoCloseTimer);
+    }
+
+    autoCloseTimer = setTimeout(() => {
+      beheerModal.classList.remove('open');
+    }, 8000);
+  }
+
+  function closeModalNow() {
+    if (!beheerModal) return;
+
+    beheerModal.classList.remove('open');
+
+    if (autoCloseTimer) {
+      clearTimeout(autoCloseTimer);
+      autoCloseTimer = null;
+    }
+  }
+
+  if (typeSelect) {
+    typeSelect.addEventListener('change', updatePreview);
+  }
+
+  [urlInput, slideInput, slideStartInput, slideLoopInput, refreshInput, cacheInput, onTimeInput, offTimeInput].forEach(el => {
+    if (el) {
+      el.addEventListener('input', updatePreview);
+      el.addEventListener('change', updatePreview);
+    }
+  });
+
+  if (presetSelect) {
+    presetSelect.addEventListener('change', function () {
+      if (presetSelect.value) {
+        fillEditorFromSelectedPreset();
+      } else if (selectedPresetInput) {
+        selectedPresetInput.value = '';
+      }
+
+      if (currentPresetMode === 'preset_delete') {
+        resetDeleteConfirmation();
+      }
+
+      syncHiddenPresetFields();
+      updatePreview();
+    });
+  }
+
+  wizardStepButtons.forEach((button) => {
+    button.addEventListener('click', function () {
+      const step = parseInt(button.dataset.stepTarget || '1', 10);
+      setWizardStep(step);
+    });
+  });
+
+  if (wizardPrevBtn) {
+    wizardPrevBtn.addEventListener('click', function () {
+      setWizardStep(currentWizardStep - 1);
+    });
+  }
+
+  if (wizardNextBtn) {
+    wizardNextBtn.addEventListener('click', function () {
+      if (currentWizardStep === 1 && !buildFinalUrl()) {
+        alert('Vul eerst een geldige URL in of kies een preset.');
+        return;
+      }
+      setWizardStep(currentWizardStep + 1);
+    });
+  }
+
+  presetModeButtons.forEach((button) => {
+    button.addEventListener('click', function () {
+      const mode = button.dataset.presetMode || '';
+      setPresetMode(mode);
+    });
+  });
+
+  if (cancelPresetModeBtn) {
+    cancelPresetModeBtn.addEventListener('click', function () {
+      clearPresetMode();
+      updatePreview();
+    });
+  }
+
+  if (testBtn) {
+    testBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+
+      const finalUrl = buildFinalUrl();
+      if (!finalUrl) {
+        alert('Geen geldige URL om te testen.');
+        return;
+      }
+
+      const width = 950;
+      const height = 650;
+      const left = Math.max(0, Math.round((window.screen.width - width) / 2));
+      const top = Math.max(0, Math.round((window.screen.height - height) / 2));
+
+      const features = [
+        'width=' + width,
+        'height=' + height,
+        'left=' + left,
+        'top=' + top,
+        'resizable=yes',
+        'scrollbars=yes'
+      ].join(',');
+
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.location.href = finalUrl;
+        previewWindow.focus();
+      } else {
+        previewWindow = window.open(finalUrl, 'kioskPreviewWindow', features);
+      }
+
+      if (!previewWindow) {
+        alert('Popup geblokkeerd door de browser. Sta popups toe voor deze pagina.');
+      }
+    });
+  }
+
+  if (gearFab) {
+    gearFab.addEventListener('click', function () {
+      openBeheerModal();
+    });
+  }
+
+  if (closeBeheerModal) {
+    closeBeheerModal.addEventListener('click', function () {
+      closeModalNow();
+    });
+  }
+
+  if (beheerModal) {
+    beheerModal.addEventListener('click', function (e) {
+      if (e.target === beheerModal) {
+        closeModalNow();
+      }
+    });
+  }
+
+  if (presetCommitBtn) {
+    presetCommitBtn.addEventListener('click', function () {
+      markPresetIntent();
+    });
+  }
+
+  if (saveBtn) {
+    saveBtn.addEventListener('click', function () {
+      markSaveIntent();
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', function (event) {
+      let submitter = resolveSubmitter(event);
+      syncHiddenPresetFields();
+
+      if (!submitter && isPresetEditorOpen() && presetCommitBtn) {
+        submitter = presetCommitBtn;
+      }
+
+      if (isPresetEditorOpen() && intentActionInput && intentActionInput.value === '') {
+        markPresetIntent();
+      }
+
+      const intent = intentActionInput ? intentActionInput.value : '';
+
+      if (submitter === presetCommitBtn || intent === 'preset_commit') {
+        if (!currentPresetMode) {
+          event.preventDefault();
+          alert('Kies eerst toevoegen, wijzigen of verwijderen.');
+          return;
+        }
+
+        if ((currentPresetMode === 'preset_update' || currentPresetMode === 'preset_delete') && (!presetSelect || !presetSelect.value)) {
+          event.preventDefault();
+          alert('Kies eerst een preset.');
+          return;
+        }
+
+        if (currentPresetMode === 'preset_delete') {
+          if (!deleteConfirmArmed) {
+            event.preventDefault();
+            beginDeleteConfirmation();
+            return;
+          }
+
+          if (!confirm('Laatste controle: definitief verwijderen?')) {
+            event.preventDefault();
+            resetDeleteConfirmation();
+            return;
+          }
+        }
+
+        if (presetCommitBtn) {
+          markPresetIntent();
+          presetCommitBtn.textContent = 'Bezig...';
+          presetCommitBtn.disabled = true;
+        }
+      }
+
+      if (submitter === saveBtn && intent !== 'preset_commit') {
+        markSaveIntent();
+        if (typeSelect) {
+          typeSelect.disabled = false;
+        }
+        saveBtn.textContent = 'Bezig met opslaan...';
+        saveBtn.disabled = true;
+      }
+    });
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (!event.altKey) {
+      return;
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      if (currentWizardStep < WIZARD_MAX_STEP) {
+        setWizardStep(currentWizardStep + 1);
+      }
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      if (currentWizardStep > WIZARD_MIN_STEP) {
+        setWizardStep(currentWizardStep - 1);
+      }
+    }
+  });
+
+  let initialWizardStep = 1;
+
+  if (form) {
+    const lastAction = form.dataset.lastAction || '';
+    const hasError = form.dataset.hasError === '1';
+
+    if (hasError && lastAction === 'save') {
+      initialWizardStep = 3;
+    }
+
+    if (hasError && (lastAction === 'preset_add' || lastAction === 'preset_update' || lastAction === 'preset_delete')) {
+      setPresetMode(lastAction);
+      initialWizardStep = 1;
+    }
+  }
+
+  syncHiddenPresetFields();
+  updatePreview();
+  setWizardStep(initialWizardStep);
+  initOnboarding();
+  initFlashMessages();
+})();
+</script>
+</body>
+</html>
