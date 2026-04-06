@@ -141,22 +141,30 @@ function applyRuntimeAfterConfigSave(
 
 function badgeClass(string $status): string {
     $status = strtolower(trim($status));
-    return match ($status) {
-        'active', 'running', 'up', 'ok' => 'ok',
-        'inactive', 'failed', 'down', 'error' => 'bad',
-        default => 'warn',
-    };
+    if (in_array($status, ['active', 'running', 'up', 'ok'], true)) {
+        return 'ok';
+    }
+
+    if (in_array($status, ['inactive', 'failed', 'down', 'error'], true)) {
+        return 'bad';
+    }
+
+    return 'warn';
 }
 
 function badgeText(string $status): string {
     $status = strtolower(trim($status));
-    return match ($status) {
-        'active'   => 'Actief',
-        'inactive' => 'Inactief',
-        'failed'   => 'Fout',
-        'running'  => 'Actief',
-        default    => $status !== '' ? ucfirst($status) : 'Onbekend',
-    };
+    switch ($status) {
+        case 'active':
+        case 'running':
+            return 'Actief';
+        case 'inactive':
+            return 'Inactief';
+        case 'failed':
+            return 'Fout';
+        default:
+            return $status !== '' ? ucfirst($status) : 'Onbekend';
+    }
 }
 
 function boolToString(bool $value): string {
@@ -165,11 +173,15 @@ function boolToString(bool $value): string {
 
 function stringToBool(string $value, bool $default = true): bool {
     $value = strtolower(trim($value));
-    return match ($value) {
-        'true', '1', 'yes', 'on'  => true,
-        'false', '0', 'no', 'off' => false,
-        default                   => $default,
-    };
+    if (in_array($value, ['true', '1', 'yes', 'on'], true)) {
+        return true;
+    }
+
+    if (in_array($value, ['false', '0', 'no', 'off'], true)) {
+        return false;
+    }
+
+    return $default;
 }
 require_once __DIR__ . '/kiosk_runtime_helpers.php';
 
@@ -798,11 +810,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $CMD_SEQUENCE_ONCE
                                 );
                                 if ((bool)($runtimeApply['ok'] ?? false)) {
-                                    $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
-                                        'restart' => 'Configuratie opgeslagen. Directe wissel mislukte, kiosk is herstart om de nieuwe inhoud toe te passen.',
-                                        'deferred' => 'Configuratie opgeslagen. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
-                                        default => 'Configuratie opgeslagen. Nieuwe inhoud is toegepast.',
-                                    };
+                                    $runtimeStrategy = (string)($runtimeApply['strategy'] ?? '');
+                                    if ($runtimeStrategy === 'restart') {
+                                        $notice = 'Configuratie opgeslagen. Directe wissel mislukte, kiosk is herstart om de nieuwe inhoud toe te passen.';
+                                    } elseif ($runtimeStrategy === 'deferred') {
+                                        $notice = 'Configuratie opgeslagen. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.';
+                                    } else {
+                                        $notice = 'Configuratie opgeslagen. Nieuwe inhoud is toegepast.';
+                                    }
                                 } else {
                                     $error = 'Configuratie opgeslagen, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
                                 }
@@ -947,11 +962,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     if (!(bool)($runtimeApply['ok'] ?? false)) {
                                         $error = 'Preset gewijzigd, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
                                     } elseif ($notice === '') {
-                                        $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
-                                            'restart' => 'Preset gewijzigd. De kiosk is herstart om de wijziging toe te passen.',
-                                            'deferred' => 'Preset gewijzigd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
-                                            default => 'Preset gewijzigd en direct toegepast.',
-                                        };
+                                        $runtimeStrategy = (string)($runtimeApply['strategy'] ?? '');
+                                        if ($runtimeStrategy === 'restart') {
+                                            $notice = 'Preset gewijzigd. De kiosk is herstart om de wijziging toe te passen.';
+                                        } elseif ($runtimeStrategy === 'deferred') {
+                                            $notice = 'Preset gewijzigd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.';
+                                        } else {
+                                            $notice = 'Preset gewijzigd en direct toegepast.';
+                                        }
                                     }
                                 }
                                 kioskLog('dashboard', 'Preset gewijzigd.', ['preset' => (string)$presetPayload['url']]);
@@ -1040,11 +1058,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if (!(bool)($runtimeApply['ok'] ?? false)) {
                                 $error = 'Preset verwijderd, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
                             } else {
-                                $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
-                                    'restart' => 'Preset verwijderd. De kiosk is herstart om de wijziging toe te passen.',
-                                    'deferred' => 'Preset verwijderd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
-                                    default => 'Preset verwijderd en direct toegepast.',
-                                };
+                                $runtimeStrategy = (string)($runtimeApply['strategy'] ?? '');
+                                if ($runtimeStrategy === 'restart') {
+                                    $notice = 'Preset verwijderd. De kiosk is herstart om de wijziging toe te passen.';
+                                } elseif ($runtimeStrategy === 'deferred') {
+                                    $notice = 'Preset verwijderd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.';
+                                } else {
+                                    $notice = 'Preset verwijderd en direct toegepast.';
+                                }
                             }
                         }
 
