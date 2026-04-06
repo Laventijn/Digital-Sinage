@@ -124,7 +124,11 @@ sudo cp "$SCRIPT_DIR/netwerk.php" /var/www/html/netwerk.php
 progress
 
 say "Cronjob toevoegen..."
-(crontab -l 2>/dev/null; echo "0 */2 * * * /home/pi/refresh_chromium.sh >> /home/pi/refresh_chromium_log.txt 2>&1") | crontab -
+existing_cron="$(crontab -l 2>/dev/null | grep -v 'refresh_chromium\.sh' || true)"
+{
+  printf "%s\n" "$existing_cron"
+  echo "*/5 * * * * /home/pi/refresh_chromium.sh >> /home/pi/refresh_chromium_log.txt 2>&1"
+} | sed '/^$/N;/^\n$/D' | crontab -
 progress
 
 say "Sudoers regels installeren..."

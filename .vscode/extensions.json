@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "ms-vscode-remote.remote-ssh",
+    "eamodio.gitlens",
+    "ms-vscode.powershell",
+    "timonwong.shellcheck",
+    "xdebug.php-debug",
+    "bmewburn.vscode-intelephense-client"
+  ]
+}

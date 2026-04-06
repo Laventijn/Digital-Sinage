@@ -67,6 +67,21 @@ function stringToBool(string $value, bool $default = true): bool {
         default                   => $default,
     };
 }
+
+function formatCacheIntervalLabel(float $hours): string {
+  if ($hours <= 0) {
+    return 'Uitgeschakeld';
+  }
+
+  $minutes = (int)round($hours * 60);
+
+  if ($minutes < 60) {
+    return $minutes . ' min';
+  }
+
+  return rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.') . ' uur';
+}
+
 require_once __DIR__ . '/kiosk_runtime_helpers.php';
 
 function collectPostedConfig(array $post, array $fallback): array {
@@ -77,7 +92,7 @@ function collectPostedConfig(array $post, array $fallback): array {
     $url = trim((string)($post['url'] ?? $fallback['url']));
     $slideSeconds = (int)($post['slide_seconds'] ?? $fallback['slide_seconds']);
     $refreshSeconds = (int)($post['refresh_seconds'] ?? $fallback['refresh_seconds']);
-    $cacheHours = (int)($post['cache_hours'] ?? $fallback['cache_hours']);
+    $cacheHours = (float)($post['cache_hours'] ?? $fallback['cache_hours']);
 
     $slideStart = isset($post['slide_start']);
     $slideLoop = isset($post['slide_loop']);
@@ -116,7 +131,7 @@ function validatePostedConfig(array $cfg): ?string {
     if ((int)$cfg['refresh_seconds'] < 0 || (int)$cfg['refresh_seconds'] > 86400) {
         return 'Refresh tijd moet tussen 0 en 86400 seconden liggen.';
     }
-    if ((int)$cfg['cache_hours'] < 0 || (int)$cfg['cache_hours'] > 168) {
+    if ((float)$cfg['cache_hours'] < 0 || (float)$cfg['cache_hours'] > 168) {
         return 'Cache interval moet tussen 0 en 168 uur liggen.';
     }
     if (($cfg['on_time'] !== '' && !preg_match('/^\d{2}:\d{2}$/', (string)$cfg['on_time'])) ||
@@ -457,7 +472,7 @@ $defaults = [
     'slide_start'     => true,
     'slide_loop'      => true,
     'refresh_seconds' => 30,
-    'cache_hours'     => 2,
+    'cache_hours'     => 2.0,
     'on_time'         => '',
     'off_time'        => '',
 ];
@@ -1138,8 +1153,8 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
           <div class="k">Start automatisch</div>
           <div class="v"><?= $config['slide_start'] ? 'Ja' : 'Nee' ?></div>
 
-          <div class="k">Cache legen (trage refresh van 15sec)</div>
-          <div class="v"><?= (int)$config['cache_hours'] ?> uur</div>
+          <div class="k">Cache legen interval</div>
+          <div class="v"><?= h(formatCacheIntervalLabel((float)$config['cache_hours'])) ?></div>
 
           <div class="k">Pi aan</div>
           <div class="v"><?= h($config['on_time'] !== '' ? $config['on_time'] : 'Niet ingesteld') ?></div>
@@ -1353,8 +1368,9 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
             </div>
 
             <div class="form-row">
-              <label for="cache_hours">Cache legen om de hoeveel uur</label>
-              <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" value="<?= (int)$config['cache_hours'] ?>">
+              <label for="cache_hours">Cache legen interval (uur, decimaal toegestaan)</label>
+              <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" step="0.25" value="<?= h((string)$config['cache_hours']) ?>">
+              <div class="helper">Voorbeeld: 0.25 = 15 min, 0.5 = 30 min, 1 = 60 min.</div>
             </div>
 
             <div class="form-row">
@@ -1401,7 +1417,7 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
             </div>
             <div class="kiosk-cell">
               <div class="kiosk-cell-head">Cache</div>
-              <div class="kiosk-cell-body" id="summaryCache"><?= (int)$config['cache_hours'] ?> uur</div>
+              <div class="kiosk-cell-body" id="summaryCache"><?= h(formatCacheIntervalLabel((float)$config['cache_hours'])) ?></div>
             </div>
             <div class="kiosk-cell">
               <div class="kiosk-cell-head">Pi aan</div>
@@ -1575,6 +1591,19 @@ echo implode(",\n", $presetJs);
 
   function formatTimeOrDefault(value) {
     return value && value.trim() !== '' ? value : 'Niet ingesteld';
+  }
+
+  function formatCacheLabel(hours) {
+    if (!Number.isFinite(hours) || hours <= 0) {
+      return 'Uitgeschakeld';
+    }
+
+    const minutes = Math.round(hours * 60);
+    if (minutes < 60) {
+      return `${minutes} min`;
+    }
+
+    return `${parseFloat(hours.toFixed(2))} uur`;
   }
 
   function clampStep(step) {
@@ -2398,7 +2427,7 @@ echo implode(",\n", $presetJs);
   function updateSummary() {
     const display = getDisplayState();
     const refreshValue = refreshInput ? parseInt(refreshInput.value || '0', 10) : 0;
-    const cacheValue = cacheInput ? parseInt(cacheInput.value || '0', 10) : 0;
+    const cacheValue = cacheInput ? parseFloat(cacheInput.value || '0') : 0;
     const onTimeValue = onTimeInput ? onTimeInput.value : '';
     const offTimeValue = offTimeInput ? offTimeInput.value : '';
 
@@ -2406,7 +2435,7 @@ echo implode(",\n", $presetJs);
     if (summaryTypeEl) summaryTypeEl.textContent = getTypeLabel(display.type);
     if (summaryUrlEl) summaryUrlEl.textContent = display.url || 'Nog geen geldige URL ingevuld';
     if (summaryRefreshEl) summaryRefreshEl.textContent = `${refreshValue} sec`;
-    if (summaryCacheEl) summaryCacheEl.textContent = `${cacheValue} uur`;
+    if (summaryCacheEl) summaryCacheEl.textContent = formatCacheLabel(cacheValue);
     if (summaryOnTimeEl) summaryOnTimeEl.textContent = formatTimeOrDefault(onTimeValue);
     if (summaryOffTimeEl) summaryOffTimeEl.textContent = formatTimeOrDefault(offTimeValue);
     renderSummarySequence();

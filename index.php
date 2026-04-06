@@ -19,6 +19,12 @@ $CMD_REFRESH_ONLY     = 'sudo /home/pi/refresh.sh';  // optioneel, laat leeg als
    ======================== */
 function h(?string $s): string { return htmlspecialchars((string)$s ?? '', ENT_QUOTES, 'UTF-8'); }
 function sh(string $cmd): string { return trim((string)shell_exec($cmd)); }
+function formatCacheIntervalLabel(float $hours): string {
+  if ($hours <= 0) return 'Uitgeschakeld';
+  $minutes = (int)round($hours * 60);
+  if ($minutes < 60) return $minutes . ' min';
+  return rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.') . ' uur';
+}
 
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
@@ -63,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $url             = trim($_POST['url'] ?? '');
             $slide_seconds   = (int)($_POST['slide_seconds']   ?? 10);
             $refresh_minutes = (int)($_POST['refresh_minutes'] ?? 15);
-            $cache_hours     = (int)($_POST['cache_hours']     ?? 12);
+            $cache_hours     = (float)($_POST['cache_hours']     ?? 12);
             $on_time         = preg_replace('/[^0-9:]/','', $_POST['on_time']  ?? '07:00');
             $off_time        = preg_replace('/[^0-9:]/','', $_POST['off_time'] ?? '21:00');
 
@@ -205,8 +211,9 @@ $ip_wlan0 = sh("ip -4 addr show wlan0 | awk '/inet / {print $2}' | cut -d/ -f1")
           <input id="refresh_minutes" name="refresh_minutes" type="number" min="0" max="1440" value="<?= (int)$config['refresh_minutes'] ?>">
         </div>
         <div class="form-row">
-          <label for="cache_hours">Cache legen om de hoeveel uur</label>
-          <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" value="<?= (int)$config['cache_hours'] ?>">
+          <label for="cache_hours">Cache legen interval (uur, decimaal)</label>
+          <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" step="0.25" value="<?=h((string)$config['cache_hours'])?>">
+          <div class="helper">Huidig: <?= h(formatCacheIntervalLabel((float)$config['cache_hours'])) ?>. Voorbeeld: 0.25 = 15 min.</div>
         </div>
         <div class="form-row">
           <label for="on_time">Tijdstip Pi aan (UU:MM)</label>

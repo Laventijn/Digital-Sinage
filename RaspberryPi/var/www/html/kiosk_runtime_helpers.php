@@ -349,6 +349,13 @@ function configStringToBool(string $value, bool $default = true): bool {
     };
 }
 
+function formatConfigFloat(float $value, int $precision = 4): string {
+    $formatted = number_format($value, $precision, '.', '');
+    $formatted = rtrim(rtrim($formatted, '0'), '.');
+
+    return $formatted !== '' ? $formatted : '0';
+}
+
 function loadKioskConfig(string $file, array $defaults): array {
     $config = $defaults;
     $config['kiosk_mode'] = (string)($defaults['kiosk_mode'] ?? 'website');
@@ -451,7 +458,7 @@ function loadKioskConfig(string $file, array $defaults): array {
 
             case 'CacheInterval':
                 if (is_numeric($value)) {
-                    $config['cache_hours'] = (int)$value;
+                    $config['cache_hours'] = (float)$value;
                 }
                 break;
 
@@ -502,7 +509,7 @@ function writeKioskConfig(string $file, array $cfg): bool {
     $lines[] = '';
     $lines[] = '# Refresh instellingen';
     $lines[] = 'RefreshTime=' . (int)($cfg['refresh_seconds'] ?? 30);
-    $lines[] = 'CacheInterval=' . (int)($cfg['cache_hours'] ?? 2);
+    $lines[] = 'CacheInterval=' . formatConfigFloat(max(0.0, (float)($cfg['cache_hours'] ?? 2.0)));
     $lines[] = '';
     $lines[] = '# Tijdschema (optioneel)';
     $lines[] = trim((string)($cfg['on_time'] ?? '')) !== '' ? 'StartTime=' . trim((string)$cfg['on_time']) : '#StartTime=08:00';

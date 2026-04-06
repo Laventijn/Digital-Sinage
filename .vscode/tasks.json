@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "SSH: Test Raspberry Pi",
+      "type": "shell",
+      "command": "ssh",
+      "args": [
+        "raspberrypi-kiosk",
+        "hostname && uptime"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "SSH: Open Pi in VS Code",
+      "type": "shell",
+      "command": "code",
+      "args": [
+        "--remote",
+        "ssh-remote+raspberrypi-kiosk",
+        "/home/pi/Digital-Sinage"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "GitHub: Backup commit + push",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/backup-github.ps1"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Git: Status",
+      "type": "shell",
+      "command": "git",
+      "args": [
+        "status",
+        "-sb"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
