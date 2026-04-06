@@ -9,8 +9,22 @@ set -euo pipefail
 CONF="/etc/wpa_supplicant/wpa_supplicant.conf"
 IFACE="wlan0"
 TS=$(date +%Y%m%d-%H%M%S)
+LOG_FILE="/home/pi/kiosk-runtime.log"
+
+log_line() {
+  local message="$1"
+  shift || true
+  local extra="$*"
+  local line="[$(date '+%Y-%m-%d %H:%M:%S')] [wifi-update] ${message}"
+  if [ -n "$extra" ]; then
+    line="${line} ${extra}"
+  fi
+  echo "$line"
+  printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null || true
+}
 
 if [[ "${1:-}" == "--reconfigure" ]]; then
+  log_line "Wi-Fi reconfigure gestart."
   echo "[i] wpa_cli reconfigure…"
   if command -v wpa_cli >/dev/null 2>&1; then
     wpa_cli -i "$IFACE" reconfigure || true
@@ -21,10 +35,12 @@ if [[ "${1:-}" == "--reconfigure" ]]; then
     systemctl restart wpa_supplicant || true
     systemctl restart dhcpcd || true
   fi
+  log_line "Wi-Fi reconfigure voltooid."
   exit 0
 fi
 
 if [[ $# -lt 4 ]]; then
+  log_line "Ongeldige wifi-update oproep."
   echo "Gebruik: $0 COUNTRY SSID PSK HIDDEN(0|1)"
   exit 1
 fi
@@ -33,6 +49,8 @@ COUNTRY="$1"
 SSID="$2"
 PSK="$3"
 HIDDEN="$4"
+
+log_line "Wi-Fi update gestart." "ssid=${SSID}" "hidden=${HIDDEN}" "country=${COUNTRY}"
 
 if [[ -f "$CONF" ]]; then
   cp -a "$CONF" "${CONF}.bak-${TS}"
@@ -87,3 +105,4 @@ fi
 echo "[✓] Klaar. Huidige SSID:"
 iwgetid -r || true
 ip -4 addr show "$IFACE" | awk '/inet /{print "[i] IP:", $2}' || true
+log_line "Wi-Fi update voltooid." "ssid=${SSID}"

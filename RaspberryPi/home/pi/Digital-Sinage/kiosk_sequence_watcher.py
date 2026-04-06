@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
@@ -17,15 +18,36 @@ from zoneinfo import ZoneInfo
 
 CONFIG_FILE = "/etc/default/kiosk.conf"
 PRESETS_FILE = "/etc/default/kiosk-presets.json"
-REFRESH_SCRIPT = "/home/pi/refresh_once.sh"
+LOG_FILE = "/home/pi/kiosk-runtime.log"
+RUNTIME_APPLY_COMMAND = ["/usr/local/bin/kiosk-apply-runtime.py", "--from-config", "--reason", "sequence-watcher"]
+KIOSK_START_COMMAND = ["/bin/systemctl", "start", "kiosk.service"]
 KIOSK_RESTART_COMMAND = ["/bin/systemctl", "restart", "kiosk.service"]
+KIOSK_STOP_COMMAND = ["/bin/systemctl", "stop", "kiosk.service"]
+DAEMON_RELOAD_COMMAND = ["/bin/systemctl", "daemon-reload"]
+CHROMIUM_KILL_COMMAND = ["/usr/bin/pkill", "-u", "pi", "-f", "chromium"]
 POLL_SECONDS = 15
 DEFAULT_TIMEZONE = "Europe/Brussels"
+KIOSK_OFF_OVERRIDE_DIR = "/run/systemd/system/kiosk.service.d"
+KIOSK_OFF_OVERRIDE_FILE = os.path.join(KIOSK_OFF_OVERRIDE_DIR, "10-off-hours.conf")
+KIOSK_OFF_OVERRIDE_CONTENT = "[Service]\nRestart=no\n"
+DISPLAY_ENV = {
+    "DISPLAY": ":0",
+    "XAUTHORITY": "/home/pi/.Xauthority",
+    "HOME": "/home/pi",
+}
+LAST_OPERATING_STATE: str | None = None
 
 
 def log(message: str) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}", flush=True)
+    line = f"[{timestamp}] [sequence-watcher] {message}"
+    print(line, flush=True)
+
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
 
 
 def looks_like_google_slides(url: str) -> bool:
@@ -427,6 +449,140 @@ def time_in_range(start_time: str, stop_time: str, now: datetime) -> bool:
     return current_minutes >= start_minutes or current_minutes < stop_minutes
 
 
+def display_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env.update(DISPLAY_ENV)
+    return env
+
+
+def service_is_active(service_name: str) -> bool:
+    result = subprocess.run(
+        ["/bin/systemctl", "is-active", "--quiet", service_name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def off_hours_override_present() -> bool:
+    return os.path.exists(KIOSK_OFF_OVERRIDE_FILE)
+
+
+def enable_off_hours_override() -> bool:
+    try:
+        os.makedirs(KIOSK_OFF_OVERRIDE_DIR, exist_ok=True)
+        with open(KIOSK_OFF_OVERRIDE_FILE, "w", encoding="utf-8") as handle:
+            handle.write(KIOSK_OFF_OVERRIDE_CONTENT)
+    except OSError:
+        log("Kiosk off-hours override schrijven mislukte.")
+        return False
+
+    return run_command(DAEMON_RELOAD_COMMAND, "Systemd herladen voor off-hours override")
+
+
+def disable_off_hours_override() -> bool:
+    if not off_hours_override_present():
+        return True
+
+    try:
+        os.remove(KIOSK_OFF_OVERRIDE_FILE)
+    except OSError:
+        log("Kiosk off-hours override verwijderen mislukte.")
+        return False
+
+    return run_command(DAEMON_RELOAD_COMMAND, "Systemd herladen na off-hours override")
+
+
+def run_best_effort(commands: list[tuple[list[str], dict[str, str] | None]], description: str) -> bool:
+    success = False
+    for command, env in commands:
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+            success = True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+
+    if success:
+        log(f"{description} uitgevoerd.")
+    else:
+        log(f"{description} mislukte.")
+
+    return success
+
+
+def has_operating_schedule(config: dict[str, Any]) -> bool:
+    start_time = str(config.get("StartTime", "")).strip()
+    stop_time = str(config.get("StopTime", "")).strip()
+    return bool(
+        re.match(r"^\d{2}:\d{2}$", start_time)
+        and re.match(r"^\d{2}:\d{2}$", stop_time)
+        and start_time != stop_time
+    )
+
+
+def is_operating_time(config: dict[str, Any], now: datetime) -> bool:
+    if not has_operating_schedule(config):
+        return True
+
+    return time_in_range(str(config.get("StartTime", "")).strip(), str(config.get("StopTime", "")).strip(), now)
+
+
+def enforce_operating_schedule(config: dict[str, Any]) -> tuple[bool, datetime]:
+    global LAST_OPERATING_STATE
+
+    timezone_name = normalize_timezone(str(config.get("Timezone", detect_system_timezone())))
+    now = datetime.now(ZoneInfo(timezone_name))
+    should_be_on = is_operating_time(config, now)
+    kiosk_active = service_is_active("kiosk.service")
+    off_override_active = off_hours_override_present()
+
+    if should_be_on:
+        if LAST_OPERATING_STATE != "on" or off_override_active:
+            if off_override_active:
+                disable_off_hours_override()
+            run_best_effort(
+                [
+                    (["/usr/bin/vcgencmd", "display_power", "1"], None),
+                    (["/usr/bin/xset", "dpms", "force", "on"], display_env()),
+                ],
+                "Display ingeschakeld volgens tijdschema",
+            )
+        if not kiosk_active:
+            run_command(KIOSK_START_COMMAND, "Kiosk service gestart volgens tijdschema")
+            time.sleep(2.0)
+        LAST_OPERATING_STATE = "on"
+        return True, now
+
+    if LAST_OPERATING_STATE != "off" or kiosk_active or not off_override_active:
+        if not off_override_active:
+            enable_off_hours_override()
+        if kiosk_active:
+            run_command(KIOSK_STOP_COMMAND, "Kiosk service gestopt buiten tijdschema")
+        run_best_effort(
+            [
+                (CHROMIUM_KILL_COMMAND, None),
+            ],
+            "Chromium afgesloten buiten tijdschema",
+        )
+        run_best_effort(
+            [
+                (["/usr/bin/xset", "dpms", "force", "off"], display_env()),
+                (["/usr/bin/vcgencmd", "display_power", "0"], None),
+            ],
+            "Display uitgeschakeld buiten tijdschema",
+        )
+
+    LAST_OPERATING_STATE = "off"
+    return False, now
+
+
 def resolve_active_sequence_slot(sequence_items: list[dict[str, str]], now: datetime) -> dict[str, str] | None:
     for slot in normalize_sequence_items(sequence_items):
         if time_in_range(slot["start_time"], slot["stop_time"], now):
@@ -525,9 +681,9 @@ def resolve_sequence_runtime_data(
     }
 
 
-def run_command(command: list[str], description: str) -> bool:
+def run_command(command: list[str], description: str, env: dict[str, str] | None = None) -> bool:
     try:
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         log(f"{description} uitgevoerd.")
         return True
     except subprocess.CalledProcessError:
@@ -536,8 +692,16 @@ def run_command(command: list[str], description: str) -> bool:
 
 
 def resolve_current_sequence_preset(presets: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any] | None:
-    selected_url = str(config.get("SelectedPresetUrl", "")).strip()
-    if selected_url:
+    candidate_urls = [
+        str(config.get("SelectedPresetUrl", "")).strip(),
+        str(config.get("ResolvedPresetUrl", "")).strip(),
+        str(config.get("KioskURL", "")).strip(),
+    ]
+
+    for selected_url in candidate_urls:
+        if not selected_url:
+            continue
+
         preset = find_preset_by_url(presets, selected_url)
         if preset is not None:
             return preset
@@ -553,18 +717,17 @@ def resolve_current_sequence_preset(presets: list[dict[str, Any]], config: dict[
 
 def run_once() -> None:
     config = load_config()
-    if str(config.get("KioskMode", "website")).strip().lower() != "sequence":
+    operating_allowed, _ = enforce_operating_schedule(config)
+    if not operating_allowed:
         return
 
     presets = load_presets()
     selected_preset = resolve_current_sequence_preset(presets, config)
     if selected_preset is None:
-        log("Sequence modus actief, maar de gekozen hoofdpreset is niet gevonden.")
         return
 
     sequence_items = resolve_configured_sequence_items(config, selected_preset)
     if not sequence_items:
-        log("Sequence modus actief, maar er zijn geen overrides gevonden.")
         return
 
     runtime = resolve_sequence_runtime_data(selected_preset, sequence_items, presets, config)
@@ -599,10 +762,10 @@ def run_once() -> None:
     config["Timezone"] = normalize_timezone(str(config.get("Timezone", detect_system_timezone())))
 
     write_config(config)
-    refresh_ok = run_command([REFRESH_SCRIPT], "Refresh script")
-
-    if old_kiosk_url != runtime_url or not refresh_ok:
-        run_command(KIOSK_RESTART_COMMAND, "Kiosk restart")
+    if old_kiosk_url != runtime_url:
+        apply_ok = run_command(RUNTIME_APPLY_COMMAND, "Runtime apply script")
+        if not apply_ok:
+            run_command(KIOSK_RESTART_COMMAND, "Kiosk restart")
 
     log(
         "Sequence target bijgewerkt naar "
@@ -610,8 +773,24 @@ def run_once() -> None:
     )
 
 
-def main() -> int:
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Volg kiosk sequence- en tijdschema-updates.")
+    parser.add_argument("--once", action="store_true", help="Voer een enkele controle direct uit en stop daarna.")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
     log("Kiosk sequence watcher gestart.")
+
+    if args.once:
+        try:
+            run_once()
+            return 0
+        except Exception as exc:  # pragma: no cover - safety net for one-shot run
+            log(f"Watcher fout: {exc}")
+            return 1
+
     while True:
         try:
             run_once()
@@ -621,4 +800,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

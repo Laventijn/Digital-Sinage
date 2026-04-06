@@ -1,6 +1,14 @@
 #!/bin/bash
 
 CONFIG_FILE="/etc/default/kiosk.conf"
+LOG_FILE="/home/pi/kiosk-runtime.log"
+
+log_line() {
+    local message="$1"
+    local line="[$(date '+%Y-%m-%d %H:%M:%S')] [refresh-loop] ${message}"
+    echo "$line"
+    printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null || true
+}
 
 get_refresh_time() {
     if [ -f "$CONFIG_FILE" ]; then
@@ -18,7 +26,11 @@ get_refresh_time() {
 export DISPLAY=:0
 export XAUTHORITY=/home/pi/.Xauthority
 
+log_line "Refresh loop gestart."
+
 while true; do
-    xdotool key F5
+    if ! xdotool key F5; then
+        log_line "F5 refresh mislukte."
+    fi
     sleep "$(get_refresh_time)"
 done

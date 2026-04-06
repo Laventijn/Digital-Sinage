@@ -17,7 +17,9 @@ $AUTH_DEFAULT_PASS  = 'Kiosk123!';
 $AUTH_MAX_ATTEMPTS  = 5;
 $AUTH_LOCK_SECONDS  = 30;
 
+$CMD_APPLY_RUNTIME  = 'sudo /usr/local/bin/kiosk-apply-runtime.py --from-config --reason dashboard-save';
 $CMD_RESTART_KIOSK  = 'sudo systemctl restart kiosk.service';
+$CMD_SEQUENCE_ONCE  = 'sudo /usr/local/bin/kiosk-sequence-watcher.py --once';
 $CMD_REBOOT_PI      = 'sudo /bin/systemctl reboot';
 $CMD_REFRESH_ONLY   = 'sudo -u pi /home/pi/refresh_once.sh';
 $CMD_SSH_START      = 'sudo systemctl start ssh';
@@ -33,6 +35,108 @@ function h(?string $s): string {
 
 function sh(string $cmd): string {
     return trim((string)shell_exec($cmd));
+}
+
+function runCommandWithStatus(string $cmd): array {
+    if (!function_exists('exec')) {
+        return [
+            'exit_code' => 127,
+            'output' => 'PHP exec() is niet beschikbaar.',
+        ];
+    }
+
+    $output = [];
+    $exitCode = 0;
+    exec($cmd . ' 2>&1', $output, $exitCode);
+
+    return [
+        'exit_code' => (int)$exitCode,
+        'output' => trim(implode(PHP_EOL, $output)),
+    ];
+}
+
+function applyRuntimeAfterConfigSave(
+    string $applyCommand,
+    string $restartCommand,
+    bool $runtimeAllowed = true,
+    ?string $deferredCommand = null
+): array {
+    if (!$runtimeAllowed) {
+        $deferredResult = null;
+        if ($deferredCommand !== null && trim($deferredCommand) !== '') {
+            $deferredResult = runCommandWithStatus($deferredCommand);
+        }
+
+        kioskLog('dashboard', 'Runtime apply overgeslagen buiten tijdschema.', [
+            'command' => $applyCommand,
+            'deferred_command' => (string)$deferredCommand,
+            'deferred_exit_code' => is_array($deferredResult) ? (int)($deferredResult['exit_code'] ?? 0) : 'n/a',
+            'deferred_output' => is_array($deferredResult) ? (string)($deferredResult['output'] ?? '') : '',
+        ]);
+
+        if (is_array($deferredResult) && (int)($deferredResult['exit_code'] ?? 1) !== 0) {
+            return [
+                'ok' => false,
+                'strategy' => 'deferred_failed',
+                'apply_result' => null,
+                'restart_result' => $deferredResult,
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'strategy' => 'deferred',
+            'apply_result' => null,
+            'restart_result' => $deferredResult,
+        ];
+    }
+
+    $applyResult = runCommandWithStatus($applyCommand);
+    if ((int)$applyResult['exit_code'] === 0) {
+        kioskLog('dashboard', 'Runtime apply gelukt na config-save.', [
+            'command' => $applyCommand,
+        ]);
+
+        return [
+            'ok' => true,
+            'strategy' => 'apply',
+            'apply_result' => $applyResult,
+            'restart_result' => null,
+        ];
+    }
+
+    kioskLog('dashboard', 'Runtime apply mislukt na config-save, restart fallback gestart.', [
+        'command' => $applyCommand,
+        'exit_code' => (int)$applyResult['exit_code'],
+        'output' => (string)$applyResult['output'],
+    ]);
+
+    $restartResult = runCommandWithStatus($restartCommand);
+    if ((int)$restartResult['exit_code'] === 0) {
+        kioskLog('dashboard', 'Kiosk restart fallback gelukt na config-save.', [
+            'command' => $restartCommand,
+        ]);
+
+        return [
+            'ok' => true,
+            'strategy' => 'restart',
+            'apply_result' => $applyResult,
+            'restart_result' => $restartResult,
+        ];
+    }
+
+    kioskLog('dashboard', 'Kiosk restart fallback mislukt na config-save.', [
+        'command' => $restartCommand,
+        'exit_code' => (int)$restartResult['exit_code'],
+        'output' => (string)$restartResult['output'],
+    ]);
+
+    return [
+        'ok' => false,
+        'strategy' => 'failed',
+        'apply_result' => $applyResult,
+        'restart_result' => $restartResult,
+    ];
 }
 
 function badgeClass(string $status): string {
@@ -67,21 +171,6 @@ function stringToBool(string $value, bool $default = true): bool {
         default                   => $default,
     };
 }
-
-function formatCacheIntervalLabel(float $hours): string {
-  if ($hours <= 0) {
-    return 'Uitgeschakeld';
-  }
-
-  $minutes = (int)round($hours * 60);
-
-  if ($minutes < 60) {
-    return $minutes . ' min';
-  }
-
-  return rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.') . ' uur';
-}
-
 require_once __DIR__ . '/kiosk_runtime_helpers.php';
 
 function collectPostedConfig(array $post, array $fallback): array {
@@ -92,7 +181,7 @@ function collectPostedConfig(array $post, array $fallback): array {
     $url = trim((string)($post['url'] ?? $fallback['url']));
     $slideSeconds = (int)($post['slide_seconds'] ?? $fallback['slide_seconds']);
     $refreshSeconds = (int)($post['refresh_seconds'] ?? $fallback['refresh_seconds']);
-    $cacheHours = (float)($post['cache_hours'] ?? $fallback['cache_hours']);
+    $cacheHours = (int)($post['cache_hours'] ?? $fallback['cache_hours']);
 
     $slideStart = isset($post['slide_start']);
     $slideLoop = isset($post['slide_loop']);
@@ -131,7 +220,7 @@ function validatePostedConfig(array $cfg): ?string {
     if ((int)$cfg['refresh_seconds'] < 0 || (int)$cfg['refresh_seconds'] > 86400) {
         return 'Refresh tijd moet tussen 0 en 86400 seconden liggen.';
     }
-    if ((float)$cfg['cache_hours'] < 0 || (float)$cfg['cache_hours'] > 168) {
+    if ((int)$cfg['cache_hours'] < 0 || (int)$cfg['cache_hours'] > 168) {
         return 'Cache interval moet tussen 0 en 168 uur liggen.';
     }
     if (($cfg['on_time'] !== '' && !preg_match('/^\d{2}:\d{2}$/', (string)$cfg['on_time'])) ||
@@ -231,6 +320,34 @@ function decodePostedSequenceItems(array $post): array {
     }
 
     return ['items' => $items, 'error' => null];
+}
+
+function collectPostedPresetPayload(array $post): array {
+    $presetName = trim((string)($post['preset_name'] ?? ''));
+    $presetDescription = trim((string)($post['preset_description'] ?? ''));
+    $presetSourceUrl = trim((string)($post['preset_manage_url'] ?? ($post['url'] ?? '')));
+
+    return buildPresetPayload(
+        $presetName,
+        $presetDescription,
+        $presetSourceUrl,
+        (string)($post['type'] ?? 'website')
+    );
+}
+
+function validatePostedPresetPayload(array $presetPayload): ?string {
+    $presetName = trim((string)($presetPayload['name'] ?? ''));
+    $presetUrl = trim((string)($presetPayload['url'] ?? ''));
+
+    if ($presetName === '' || $presetUrl === '') {
+        return 'Voor een preset zijn naam en URL verplicht.';
+    }
+
+    if (!filter_var($presetUrl, FILTER_VALIDATE_URL)) {
+        return 'Ongeldige preset-URL.';
+    }
+
+    return null;
 }
 
 function loadDashboardAuth(string $file, string $fallbackUser, string $fallbackPass): array {
@@ -472,7 +589,7 @@ $defaults = [
     'slide_start'     => true,
     'slide_loop'      => true,
     'refresh_seconds' => 30,
-    'cache_hours'     => 2.0,
+    'cache_hours'     => 2,
     'on_time'         => '',
     'off_time'        => '',
 ];
@@ -554,6 +671,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'save') {
             $selectedPresetUrl = trim((string)($_POST['preset_url'] ?? ''));
             $selectedPreset = $selectedPresetUrl !== '' ? findPresetByUrl($PRESETS, $selectedPresetUrl) : null;
+            $draftPresetMode = in_array($presetModePosted, ['preset_add', 'preset_update'], true) ? $presetModePosted : '';
             $draft = collectPostedConfig($_POST, $config);
             $decodedSequence = decodePostedSequenceItems($_POST);
             $sequenceFormStateItems = (array)($decodedSequence['items'] ?? []);
@@ -561,27 +679,101 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (($decodedSequence['error'] ?? null) !== null) {
                 $error = (string)$decodedSequence['error'];
-            } elseif ($selectedPresetUrl === '') {
-                $error = 'Kies eerst een hoofdpreset in stap 1.';
             } elseif ($validationError !== null) {
                 $error = $validationError;
             } else {
+                if ($draftPresetMode !== '') {
+                    $draftPresetPayload = collectPostedPresetPayload($_POST);
+                    $presetManageName = trim((string)($draftPresetPayload['name'] ?? ''));
+                    $presetManageDescription = trim((string)($draftPresetPayload['description'] ?? ''));
+                    $presetManageUrl = trim((string)($draftPresetPayload['url'] ?? ''));
+                    $presetManageSelected = trim((string)($_POST['selected_preset'] ?? $selectedPresetUrl));
+
+                    $draftPresetError = validatePostedPresetPayload($draftPresetPayload);
+                    if ($draftPresetError !== null) {
+                        $error = $draftPresetError;
+                    } elseif ($draftPresetMode === 'preset_add') {
+                        $existingIndex = findPresetIndexByUrl($PRESETS, (string)$draftPresetPayload['url']);
+                        if ($existingIndex >= 0) {
+                            $error = 'Er bestaat al een preset met deze URL.';
+                        } else {
+                            $PRESETS[] = $draftPresetPayload;
+                            if (!savePresets($PRESETS_FILE, $PRESETS)) {
+                                $error = 'Kon preset-bestand niet opslaan.';
+                            } else {
+                                $selectedPreset = $draftPresetPayload;
+                                $selectedPresetUrl = trim((string)$draftPresetPayload['url']);
+                                $presetManageSelected = $selectedPresetUrl;
+                                $currentPreset = $selectedPresetUrl;
+                                kioskLog('dashboard', 'Preset toegevoegd tijdens config-save.', [
+                                    'preset' => $selectedPresetUrl,
+                                    'mode' => 'preset_add',
+                                ]);
+                            }
+                        }
+                    } else {
+                        $selectedUpdateUrl = trim((string)($_POST['selected_preset'] ?? $selectedPresetUrl));
+                        if ($selectedUpdateUrl === '') {
+                            $error = 'Kies eerst een preset om te wijzigen.';
+                        } else {
+                            $index = findPresetIndexByUrl($PRESETS, $selectedUpdateUrl);
+                            if ($index < 0) {
+                                $error = 'Gekozen preset niet gevonden.';
+                            } else {
+                                $duplicateIndex = findPresetIndexByUrl($PRESETS, (string)$draftPresetPayload['url']);
+                                if ($duplicateIndex >= 0 && $duplicateIndex !== $index) {
+                                    $error = 'Er bestaat al een preset met deze URL.';
+                                } else {
+                                    $PRESETS[$index] = array_merge(
+                                        is_array($PRESETS[$index]) ? $PRESETS[$index] : [],
+                                        $draftPresetPayload
+                                    );
+
+                                    if (!savePresets($PRESETS_FILE, $PRESETS)) {
+                                        $error = 'Kon preset-bestand niet opslaan.';
+                                    } else {
+                                        $selectedPreset = $PRESETS[$index];
+                                        $selectedPresetUrl = trim((string)($selectedPreset['url'] ?? ''));
+                                        $presetManageSelected = $selectedPresetUrl;
+                                        $currentPreset = $selectedPresetUrl;
+                                        kioskLog('dashboard', 'Preset bijgewerkt tijdens config-save.', [
+                                            'preset' => $selectedPresetUrl,
+                                            'mode' => 'preset_update',
+                                        ]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if ($error === '' && $selectedPreset === null) {
+                    $error = 'Kies eerst een hoofdpreset in stap 1.';
+                }
+
                 $sequenceValidationError = validateSequenceItemsAgainstPresets(
                     $sequenceFormStateItems,
                     $PRESETS,
                     $selectedPresetUrl
                 );
 
-                if ($sequenceValidationError !== null) {
-                    $error = $sequenceValidationError;
-                } else {
-                    $appliedConfig = buildAppliedConfigForSelection($draft, $selectedPreset, $PRESETS, $sequenceFormStateItems);
-                }
-
                 if ($error !== '') {
                     $presetManageSelected = $selectedPresetUrl;
+                } elseif ($sequenceValidationError !== null) {
+                    $error = $sequenceValidationError;
                 } else {
-                $runtimeError = validateAppliedConfig($appliedConfig);
+                    if (!syncPresetSequenceItems($PRESETS, $selectedPresetUrl, $sequenceFormStateItems)) {
+                        $error = 'De sequence kon niet aan de gekozen preset gekoppeld worden.';
+                    } elseif (!savePresets($PRESETS_FILE, $PRESETS)) {
+                        $error = 'Kon preset-bestand niet opslaan.';
+                    } else {
+                        $selectedPreset = findPresetByUrl($PRESETS, $selectedPresetUrl);
+                    }
+                }
+
+                if ($error === '') {
+                    $appliedConfig = buildAppliedConfigForSelection($draft, $selectedPreset, $PRESETS, $sequenceFormStateItems);
+                    $runtimeError = validateAppliedConfig($appliedConfig);
 
                     if ($runtimeError !== null) {
                         $error = $runtimeError;
@@ -592,9 +784,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (!writeKioskConfig($CONFIG_FILE, $config)) {
                             $error = "Kon {$CONFIG_FILE} niet schrijven. Controleer permissies.";
                         } else {
+                            kioskLog('dashboard', 'Configuratie opgeslagen.', [
+                                'preset' => $selectedPresetUrl,
+                                'mode' => (string)($config['kiosk_mode'] ?? 'website'),
+                                'sequence_items' => count((array)($config['sequence_items'] ?? [])),
+                            ]);
+
                             if ($RESTART_AFTER_SAVE) {
-                                shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
-                                $notice = 'Configuratie opgeslagen en kioskservice herstart.';
+                                $runtimeApply = applyRuntimeAfterConfigSave(
+                                    $CMD_APPLY_RUNTIME,
+                                    $CMD_RESTART_KIOSK,
+                                    isWithinOperatingSchedule($config),
+                                    $CMD_SEQUENCE_ONCE
+                                );
+                                if ((bool)($runtimeApply['ok'] ?? false)) {
+                                    $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
+                                        'restart' => 'Configuratie opgeslagen. Directe wissel mislukte, kiosk is herstart om de nieuwe inhoud toe te passen.',
+                                        'deferred' => 'Configuratie opgeslagen. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
+                                        default => 'Configuratie opgeslagen. Nieuwe inhoud is toegepast.',
+                                    };
+                                } else {
+                                    $error = 'Configuratie opgeslagen, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
+                                }
                             } else {
                                 $notice = 'Configuratie opgeslagen.';
                             }
@@ -632,6 +843,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (savePresets($PRESETS_FILE, $PRESETS)) {
                         $currentPreset = (string)$presetPayload['url'];
                         $presetManageSelected = (string)$presetPayload['url'];
+                        kioskLog('dashboard', 'Preset toegevoegd.', ['preset' => $currentPreset]);
                         $notice = 'Nieuwe preset toegevoegd.';
                         $presetManageName = '';
                         $presetManageDescription = '';
@@ -681,6 +893,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $presetPayload
                         );
 
+                        if (
+                            $oldPresetUrl !== ''
+                            && !urlsReferToSamePreset($oldPresetUrl, (string)$presetPayload['url'])
+                        ) {
+                            rewritePresetSequenceReferences($PRESETS, $oldPresetUrl, (string)$presetPayload['url']);
+                        }
+
                         if (savePresets($PRESETS_FILE, $PRESETS)) {
                             $configWasUpdated = false;
                             $currentSequenceItems = normalizeSequenceItems($config['sequence_items'] ?? []);
@@ -719,9 +938,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $error = 'Preset gewijzigd, maar kioskconfig kon niet worden bijgewerkt.';
                             } else {
                                 if ($configWasUpdated && $RESTART_AFTER_SAVE) {
-                                    shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+                                    $runtimeApply = applyRuntimeAfterConfigSave(
+                                        $CMD_APPLY_RUNTIME,
+                                        $CMD_RESTART_KIOSK,
+                                        isWithinOperatingSchedule($config),
+                                        $CMD_SEQUENCE_ONCE
+                                    );
+                                    if (!(bool)($runtimeApply['ok'] ?? false)) {
+                                        $error = 'Preset gewijzigd, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
+                                    } elseif ($notice === '') {
+                                        $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
+                                            'restart' => 'Preset gewijzigd. De kiosk is herstart om de wijziging toe te passen.',
+                                            'deferred' => 'Preset gewijzigd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
+                                            default => 'Preset gewijzigd en direct toegepast.',
+                                        };
+                                    }
                                 }
-                                $notice = 'Preset gewijzigd.';
+                                kioskLog('dashboard', 'Preset gewijzigd.', ['preset' => (string)$presetPayload['url']]);
+                                if ($notice === '' && $error === '') {
+                                    $notice = 'Preset gewijzigd.';
+                                }
                                 $currentPreset = (string)$presetPayload['url'];
                                 $presetManageSelected = (string)$presetPayload['url'];
                             }
@@ -744,14 +980,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error = 'Gekozen preset niet gevonden.';
                 } else {
                     $deletedPreset = is_array($PRESETS[$index]) ? $PRESETS[$index] : null;
+                    $deletedUrl = trim((string)($deletedPreset['url'] ?? ''));
                     unset($PRESETS[$index]);
+                    rewritePresetSequenceReferences($PRESETS, $deletedUrl, '');
 
                     if (savePresets($PRESETS_FILE, $PRESETS)) {
                         $PRESETS = array_values($PRESETS);
+                        kioskLog('dashboard', 'Preset verwijderd.', ['preset' => $selected_url]);
                         $notice = 'Preset verwijderd.';
                         $configWasUpdated = false;
 
-                        $deletedUrl = trim((string)($deletedPreset['url'] ?? ''));
                         $configSelectedPreset = trim((string)($config['selected_preset_url'] ?? ''));
                         $currentSequenceItems = normalizeSequenceItems($config['sequence_items'] ?? []);
                         $filteredSequenceItems = [];
@@ -793,7 +1031,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($configWasUpdated && !writeKioskConfig($CONFIG_FILE, $config)) {
                             $error = 'Preset verwijderd, maar kioskconfig kon niet opgeschoond worden.';
                         } elseif ($configWasUpdated && $RESTART_AFTER_SAVE) {
-                            shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+                            $runtimeApply = applyRuntimeAfterConfigSave(
+                                $CMD_APPLY_RUNTIME,
+                                $CMD_RESTART_KIOSK,
+                                isWithinOperatingSchedule($config),
+                                $CMD_SEQUENCE_ONCE
+                            );
+                            if (!(bool)($runtimeApply['ok'] ?? false)) {
+                                $error = 'Preset verwijderd, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
+                            } else {
+                                $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
+                                    'restart' => 'Preset verwijderd. De kiosk is herstart om de wijziging toe te passen.',
+                                    'deferred' => 'Preset verwijderd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
+                                    default => 'Preset verwijderd en direct toegepast.',
+                                };
+                            }
                         }
 
                         $currentPreset = '';
@@ -807,21 +1059,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         } elseif ($action === 'restart_kiosk') {
             shell_exec($CMD_RESTART_KIOSK . ' > /dev/null 2>&1 &');
+            kioskLog('dashboard', 'Handmatige kiosk restart gestart.');
             $notice = 'Kioskservice wordt herstart...';
         } elseif ($action === 'refresh') {
             shell_exec($CMD_REFRESH_ONLY . ' > /dev/null 2>&1 &');
+            kioskLog('dashboard', 'Handmatige refresh gestart.');
             $notice = 'Refresh-script gestart...';
         } elseif ($action === 'reboot') {
             shell_exec($CMD_REBOOT_PI . ' > /dev/null 2>&1 &');
+            kioskLog('dashboard', 'Handmatige reboot gestart.');
             $notice = 'Reboot gestart...';
         } elseif ($action === 'ssh_start') {
             shell_exec($CMD_SSH_START . ' > /dev/null 2>&1 &');
+            kioskLog('dashboard', 'SSH start aangevraagd.');
             $notice = 'SSH gestart. VS Code Remote SSH kan nu verbinden.';
         } elseif ($action === 'ssh_stop') {
             shell_exec($CMD_SSH_STOP . ' > /dev/null 2>&1 &');
+            kioskLog('dashboard', 'SSH stop aangevraagd.');
             $notice = 'SSH gestopt. VS Code Remote SSH is nu geblokkeerd.';
         } elseif ($action === 'clear_cache') {
             shell_exec($CMD_CLEAR_CACHE . ' > /dev/null 2>&1 &');
+            kioskLog('dashboard', 'Chromium cache clear aangevraagd.');
             $notice = 'Chromium cache wordt leeggemaakt...';
         }
     }
@@ -1003,6 +1261,7 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
       <section class="soft-card">
         <h3 class="subsection-title">Cache en services</h3>
         <div class="actions">
+          <button type="submit" form="configForm" name="action" value="refresh" class="ghost">Nu verversen</button>
           <button type="submit" form="configForm" name="action" value="clear_cache" class="ghost">Cache legen</button>
           <button type="submit" form="configForm" name="action" value="restart_kiosk" class="ghost">Kiosk herstarten</button>
           <button type="submit" form="configForm" name="action" value="ssh_start" class="ghost">SSH starten</button>
@@ -1153,8 +1412,8 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
           <div class="k">Start automatisch</div>
           <div class="v"><?= $config['slide_start'] ? 'Ja' : 'Nee' ?></div>
 
-          <div class="k">Cache legen interval</div>
-          <div class="v"><?= h(formatCacheIntervalLabel((float)$config['cache_hours'])) ?></div>
+          <div class="k">Cache legen (trage refresh van 15sec)</div>
+          <div class="v"><?= (int)$config['cache_hours'] ?> uur</div>
 
           <div class="k">Pi aan</div>
           <div class="v"><?= h($config['on_time'] !== '' ? $config['on_time'] : 'Niet ingesteld') ?></div>
@@ -1325,6 +1584,16 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
             </div>
           </div>
 
+          <div class="form-row hidden" id="sequenceCustomUrlRow">
+            <label class="editor-label" for="sequenceCustomUrl">Directe override URL</label>
+            <input
+              type="url"
+              id="sequenceCustomUrl"
+              placeholder="https://voorbeeld.be/pagina"
+            >
+            <div class="small">Gebruik dit alleen als de override nog geen preset is.</div>
+          </div>
+
           <div class="sequence-builder-card hidden" id="sequenceBuilderCard">
             <div class="sequence-builder-card-head">
               <div>
@@ -1368,9 +1637,8 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
             </div>
 
             <div class="form-row">
-              <label for="cache_hours">Cache legen interval (uur, decimaal toegestaan)</label>
-              <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" step="0.25" value="<?= h((string)$config['cache_hours']) ?>">
-              <div class="helper">Voorbeeld: 0.25 = 15 min, 0.5 = 30 min, 1 = 60 min.</div>
+              <label for="cache_hours">Cache legen om de hoeveel uur</label>
+              <input id="cache_hours" name="cache_hours" type="number" min="0" max="168" value="<?= (int)$config['cache_hours'] ?>">
             </div>
 
             <div class="form-row">
@@ -1417,7 +1685,7 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
             </div>
             <div class="kiosk-cell">
               <div class="kiosk-cell-head">Cache</div>
-              <div class="kiosk-cell-body" id="summaryCache"><?= h(formatCacheIntervalLabel((float)$config['cache_hours'])) ?></div>
+              <div class="kiosk-cell-body" id="summaryCache"><?= (int)$config['cache_hours'] ?> uur</div>
             </div>
             <div class="kiosk-cell">
               <div class="kiosk-cell-head">Pi aan</div>
@@ -1519,6 +1787,8 @@ if (is_array($currentPresetData) && $currentConfiguredSequenceItems !== []) {
   const sequenceReadOnlyHint = document.getElementById('sequenceReadOnlyHint');
   const sequenceControlRow = document.getElementById('sequenceControlRow');
   const sequencePresetSelect = document.getElementById('sequencePresetSelect');
+  const sequenceCustomUrlRow = document.getElementById('sequenceCustomUrlRow');
+  const sequenceCustomUrlInput = document.getElementById('sequenceCustomUrl');
   const sequenceSourceHint = document.getElementById('sequenceSourceHint');
   const sequenceAddBtn = document.getElementById('sequenceAddBtn');
   const sequenceBuilderCard = document.getElementById('sequenceBuilderCard');
@@ -1554,7 +1824,11 @@ foreach ($PRESETS as $preset) {
     $n = json_encode((string)$preset['name'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     $d = json_encode((string)($preset['description'] ?? ''), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     $t = json_encode((string)($preset['type'] ?? 'website'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    $presetJs[] = "    {$u}: { name: {$n}, url: {$u}, description: {$d}, type: {$t} }";
+    $s = json_encode(normalizeSequenceItems($preset['sequence'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($s === false) {
+        $s = '[]';
+    }
+    $presetJs[] = "    {$u}: { name: {$n}, url: {$u}, description: {$d}, type: {$t}, sequence: {$s} }";
 }
 echo implode(",\n", $presetJs);
 ?>
@@ -1591,19 +1865,6 @@ echo implode(",\n", $presetJs);
 
   function formatTimeOrDefault(value) {
     return value && value.trim() !== '' ? value : 'Niet ingesteld';
-  }
-
-  function formatCacheLabel(hours) {
-    if (!Number.isFinite(hours) || hours <= 0) {
-      return 'Uitgeschakeld';
-    }
-
-    const minutes = Math.round(hours * 60);
-    if (minutes < 60) {
-      return `${minutes} min`;
-    }
-
-    return `${parseFloat(hours.toFixed(2))} uur`;
   }
 
   function clampStep(step) {
@@ -1705,7 +1966,8 @@ echo implode(",\n", $presetJs);
   }
 
   function getSequenceSourceOptions() {
-    const mainPresetUrl = presetSelect ? presetSelect.value.trim() : '';
+    const mainPreset = getMainPresetContext();
+    const mainPresetUrl = mainPreset && mainPreset.url ? String(mainPreset.url).trim() : '';
 
     return Object.values(presetMap).filter((preset) => {
       if (!preset || !preset.url) {
@@ -1714,6 +1976,29 @@ echo implode(",\n", $presetJs);
 
       return !(mainPresetUrl !== '' && preset.url === mainPresetUrl);
     });
+  }
+
+  function isCustomSequenceSource(url) {
+    return !!(url && !presetMap[url]);
+  }
+
+  function updateSequenceCustomUrlVisibility() {
+    const customSelected = !!(sequencePresetSelect && sequencePresetSelect.value === '__custom__');
+    if (sequenceCustomUrlRow) {
+      sequenceCustomUrlRow.classList.toggle('hidden', !customSelected);
+    }
+  }
+
+  function getSequenceSourceValue() {
+    if (!sequencePresetSelect) {
+      return '';
+    }
+
+    if (sequencePresetSelect.value === '__custom__') {
+      return ensureHttp(sequenceCustomUrlInput ? sequenceCustomUrlInput.value.trim() : '');
+    }
+
+    return sequencePresetSelect.value.trim();
   }
 
   function syncSequenceHiddenInput() {
@@ -1748,20 +2033,47 @@ echo implode(",\n", $presetJs);
     return presetMap[selectedUrl];
   }
 
+  function getDraftMainPresetData() {
+    if (!(currentPresetMode === 'preset_add' || currentPresetMode === 'preset_update')) {
+      return null;
+    }
+
+    const draftUrl = buildFinalUrl();
+    if (!draftUrl) {
+      return null;
+    }
+
+    return {
+      name: presetNameInput && presetNameInput.value.trim() !== '' ? presetNameInput.value.trim() : 'Nieuwe preset',
+      url: ensureHttp(urlInput ? urlInput.value.trim() : ''),
+      description: presetDescriptionInput ? presetDescriptionInput.value.trim() : '',
+      type: getSelectedType()
+    };
+  }
+
+  function getMainPresetContext() {
+    const draftPreset = getDraftMainPresetData();
+    if (draftPreset) {
+      return draftPreset;
+    }
+
+    return getSelectedPresetData();
+  }
+
   function hasChosenPreset() {
     return !!(presetSelect && presetSelect.value && presetSelect.value.trim() !== '');
   }
 
   function hasPresetContext() {
-    return hasChosenPreset();
+    return !!getMainPresetContext();
   }
 
   function isSequenceEditable() {
-    return hasChosenPreset() && !isPresetEditorOpen();
+    return hasPresetContext() && currentPresetMode !== 'preset_delete';
   }
 
   function canContinueFromStep1() {
-    return hasChosenPreset();
+    return hasPresetContext();
   }
 
   function stopDeleteCountdown() {
@@ -1830,13 +2142,6 @@ echo implode(",\n", $presetJs);
     if (presetDescriptionInput) presetDescriptionInput.readOnly = locked;
     if (urlInput) urlInput.readOnly = locked;
     if (typeSelect) typeSelect.disabled = locked;
-    if (sequencePresetSelect) sequencePresetSelect.disabled = locked;
-
-    if (sequenceItemsList) {
-      sequenceItemsList.querySelectorAll('button').forEach((button) => {
-        button.disabled = locked;
-      });
-    }
   }
 
   function syncHiddenPresetFields() {
@@ -1963,10 +2268,12 @@ echo implode(",\n", $presetJs);
   }
 
   function syncSequenceFromSelectedPreset() {
-    const selectedUrl = presetSelect ? presetSelect.value.trim() : '';
+    const selectedPreset = getSelectedPresetData();
+    const selectedUrl = selectedPreset && selectedPreset.url ? String(selectedPreset.url).trim() : '';
+    const presetSequence = normalizeSequenceItemsState(selectedPreset && selectedPreset.sequence ? selectedPreset.sequence : []);
     currentSequenceItems = shouldReuseInitialSequenceState(selectedUrl)
       ? normalizeSequenceItemsState(initialSequenceSnapshot)
-      : [];
+      : presetSequence;
     renderSequenceSourceOptions();
     renderSequenceList();
     closeSequenceBuilder();
@@ -1977,8 +2284,10 @@ echo implode(",\n", $presetJs);
       return;
     }
 
-    const currentValue = selectedUrl || sequencePresetSelect.value || '';
+    const currentSelectValue = sequencePresetSelect.value || '';
+    const currentValue = selectedUrl || (currentSelectValue === '__custom__' ? '__custom__' : getSequenceSourceValue() || '');
     const options = getSequenceSourceOptions();
+    const customSelected = currentValue === '__custom__' || isCustomSequenceSource(currentValue);
     sequencePresetSelect.innerHTML = '<option value="">-- Selecteer override preset --</option>';
 
     let foundSelected = false;
@@ -1993,38 +2302,64 @@ echo implode(",\n", $presetJs);
       sequencePresetSelect.appendChild(option);
     });
 
-    if (!foundSelected && currentValue !== '') {
+    if (!foundSelected && currentValue !== '' && !customSelected) {
       const option = document.createElement('option');
       option.value = currentValue;
       option.textContent = getPresetLabelByUrl(currentValue);
       option.selected = true;
       sequencePresetSelect.appendChild(option);
     }
+
+    const customOption = document.createElement('option');
+    customOption.value = '__custom__';
+    customOption.textContent = 'Directe website of presentatie URL';
+    if (customSelected) {
+      customOption.selected = true;
+    }
+    sequencePresetSelect.appendChild(customOption);
+
+    if (sequenceCustomUrlInput) {
+      if (!customSelected) {
+        sequenceCustomUrlInput.value = '';
+      } else if (currentValue !== '__custom__') {
+        sequenceCustomUrlInput.value = currentValue;
+      }
+    }
+
+    updateSequenceCustomUrlVisibility();
   }
+
   function updateSequenceHint() {
     if (!sequenceSourceHint) {
       return;
     }
 
     if (!hasPresetContext()) {
-      sequenceSourceHint.textContent = 'Kies eerst een hoofdpreset in stap 1.';
+      sequenceSourceHint.textContent = 'Kies of vul in stap 1 eerst de hoofdpreset in.';
       if (sequenceAddBtn) sequenceAddBtn.disabled = true;
+      if (sequencePresetSelect) sequencePresetSelect.disabled = true;
+      if (sequenceCustomUrlInput) sequenceCustomUrlInput.disabled = true;
       return;
     }
 
     if (!isSequenceEditable()) {
-      sequenceSourceHint.textContent = 'Sluit eerst het presetbeheer in stap 1 om overrides te plannen.';
+      sequenceSourceHint.textContent = 'Annuleer eerst het verwijderen als je overrides wilt wijzigen.';
       if (sequenceAddBtn) sequenceAddBtn.disabled = true;
+      if (sequencePresetSelect) sequencePresetSelect.disabled = true;
+      if (sequenceCustomUrlInput) sequenceCustomUrlInput.disabled = true;
       return;
     }
 
-    if (getSequenceSourceOptions().length === 0) {
-      sequenceSourceHint.textContent = 'Voeg eerst minstens een extra preset toe voordat je een override plant.';
-      if (sequenceAddBtn) sequenceAddBtn.disabled = true;
-      return;
+    if (sequencePresetSelect) sequencePresetSelect.disabled = false;
+    if (sequenceCustomUrlInput) {
+      sequenceCustomUrlInput.disabled = !(sequencePresetSelect && sequencePresetSelect.value === '__custom__');
     }
 
-    sequenceSourceHint.textContent = 'Kies een override preset en klik daarna op het plus-teken.';
+    if (sequencePresetSelect && sequencePresetSelect.value === '__custom__') {
+      sequenceSourceHint.textContent = 'Voer een directe override URL in en klik daarna op het plus-teken.';
+    } else {
+      sequenceSourceHint.textContent = 'Kies een override preset of directe URL en klik daarna op het plus-teken.';
+    }
     if (sequenceAddBtn) sequenceAddBtn.disabled = false;
   }
 
@@ -2033,18 +2368,22 @@ echo implode(",\n", $presetJs);
     const editable = isSequenceEditable();
 
     if (sequenceControlRow) {
-      sequenceControlRow.classList.toggle('hidden', !editable);
+      sequenceControlRow.classList.toggle('hidden', !hasContext);
+    }
+
+    if (sequenceCustomUrlRow) {
+      sequenceCustomUrlRow.classList.toggle('hidden', !(editable && sequencePresetSelect && sequencePresetSelect.value === '__custom__'));
     }
 
     if (sequenceReadOnlyHint) {
       if (!hasContext) {
-        sequenceReadOnlyHint.textContent = 'Kies in stap 1 eerst een hoofdpreset.';
+        sequenceReadOnlyHint.textContent = 'Kies of vul in stap 1 eerst de hoofdpreset in.';
         sequenceReadOnlyHint.classList.remove('hidden');
-      } else if (editable) {
-        sequenceReadOnlyHint.classList.add('hidden');
+      } else if (!editable) {
+        sequenceReadOnlyHint.textContent = 'Preset verwijderen actief. Annuleer dat eerst om overrides te wijzigen.';
+        sequenceReadOnlyHint.classList.remove('hidden');
       } else {
-        sequenceReadOnlyHint.textContent = 'Presetbeheer staat open. Sluit dat eerst om overrides te wijzigen.';
-        sequenceReadOnlyHint.classList.remove('hidden');
+        sequenceReadOnlyHint.classList.add('hidden');
       }
     }
 
@@ -2118,7 +2457,7 @@ echo implode(",\n", $presetJs);
     renderSequenceSourceOptions();
     updateSequenceHint();
 
-    if (!sequenceBuilderCard || !sequenceSlotRows || getSequenceSourceOptions().length === 0) {
+    if (!sequenceBuilderCard || !sequenceSlotRows) {
       return;
     }
 
@@ -2136,7 +2475,10 @@ echo implode(",\n", $presetJs);
       const options = getSequenceSourceOptions();
       if (options[0] && sequencePresetSelect) {
         sequencePresetSelect.value = options[0].url;
+      } else if (sequencePresetSelect) {
+        sequencePresetSelect.value = '__custom__';
       }
+      updateSequenceCustomUrlVisibility();
       appendSequenceSlotRow('', '');
     }
 
@@ -2148,9 +2490,16 @@ echo implode(",\n", $presetJs);
       return null;
     }
 
-    const presetUrl = sequencePresetSelect.value.trim();
+    const presetUrl = getSequenceSourceValue();
     if (!presetUrl) {
-      alert('Kies eerst bir override preset.');
+      alert('Kies eerst een override preset of vul een directe URL in.');
+      return null;
+    }
+
+    try {
+      new URL(presetUrl);
+    } catch (error) {
+      alert('De override URL is ongeldig.');
       return null;
     }
 
@@ -2297,6 +2646,9 @@ echo implode(",\n", $presetJs);
       if (presetDescriptionInput) presetDescriptionInput.value = '';
       if (urlInput) urlInput.value = '';
       setType('website');
+      currentSequenceItems = [];
+      renderSequenceList();
+      closeSequenceBuilder();
     } else {
       fillEditorFromSelectedPreset();
     }
@@ -2406,7 +2758,11 @@ echo implode(",\n", $presetJs);
 
   function markSaveIntent() {
     if (intentActionInput) intentActionInput.value = 'save_commit';
-    if (presetModeInput) presetModeInput.value = '';
+    if (presetModeInput) {
+      presetModeInput.value = (currentPresetMode === 'preset_add' || currentPresetMode === 'preset_update')
+        ? currentPresetMode
+        : '';
+    }
   }
 
   function getDisplayState() {
@@ -2427,7 +2783,7 @@ echo implode(",\n", $presetJs);
   function updateSummary() {
     const display = getDisplayState();
     const refreshValue = refreshInput ? parseInt(refreshInput.value || '0', 10) : 0;
-    const cacheValue = cacheInput ? parseFloat(cacheInput.value || '0') : 0;
+    const cacheValue = cacheInput ? parseInt(cacheInput.value || '0', 10) : 0;
     const onTimeValue = onTimeInput ? onTimeInput.value : '';
     const offTimeValue = offTimeInput ? offTimeInput.value : '';
 
@@ -2435,7 +2791,7 @@ echo implode(",\n", $presetJs);
     if (summaryTypeEl) summaryTypeEl.textContent = getTypeLabel(display.type);
     if (summaryUrlEl) summaryUrlEl.textContent = display.url || 'Nog geen geldige URL ingevuld';
     if (summaryRefreshEl) summaryRefreshEl.textContent = `${refreshValue} sec`;
-    if (summaryCacheEl) summaryCacheEl.textContent = formatCacheLabel(cacheValue);
+    if (summaryCacheEl) summaryCacheEl.textContent = `${cacheValue} uur`;
     if (summaryOnTimeEl) summaryOnTimeEl.textContent = formatTimeOrDefault(onTimeValue);
     if (summaryOffTimeEl) summaryOffTimeEl.textContent = formatTimeOrDefault(offTimeValue);
     renderSummarySequence();
@@ -2447,6 +2803,7 @@ echo implode(",\n", $presetJs);
     updatePresetActionAvailability();
     updatePresetVisibility();
     updateSequenceEditorState();
+    renderSequenceSourceOptions(getSequenceSourceValue());
     syncHiddenPresetFields();
 
     const display = getDisplayState();
@@ -2540,6 +2897,21 @@ echo implode(",\n", $presetJs);
 
       syncHiddenPresetFields();
       updatePreview();
+    });
+  }
+
+  if (sequencePresetSelect) {
+    sequencePresetSelect.addEventListener('change', function () {
+      updateSequenceCustomUrlVisibility();
+      updateSequenceHint();
+    });
+  }
+
+  if (sequenceCustomUrlInput) {
+    ['input', 'change'].forEach((eventName) => {
+      sequenceCustomUrlInput.addEventListener(eventName, function () {
+        updateSequenceHint();
+      });
     });
   }
 

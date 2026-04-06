@@ -1,5 +1,6 @@
 # Handleiding Kiosk Website
-
+## Versie
+Emre 2026-04-03
 ## Inleiding
 
 Dit systeem is een digitale kiosk-oplossing op basis van een Raspberry Pi, Chromium en een webdashboard. Via de website kan je een preset kiezen, tijdelijke overrides instellen, de kioskconfiguratie bewaren en een aantal beheerfuncties gebruiken.

@@ -3,6 +3,8 @@
 set -euo pipefail
 
 KIOSK_CONF="/etc/default/kiosk.conf"
+LOG_FILE="/home/pi/kiosk-runtime.log"
+APPLY_SCRIPT="/usr/local/bin/kiosk-apply-runtime.py"
 
 KIOSK_URL="${1:-http://localhost/}"
 REFRESH_TIME="${2:-30}"
@@ -18,6 +20,21 @@ SLIDE_START="${11:-true}"
 SLIDE_LOOP="${12:-true}"
 SLIDE_DELAY="${13:-5000}"
 
+log_line() {
+  local message="$1"
+  shift || true
+  local extra="$*"
+  local line
+  line="[$(date '+%Y-%m-%d %H:%M:%S')] [kiosk-update] ${message}"
+  if [ -n "$extra" ]; then
+    line="${line} ${extra}"
+  fi
+  echo "$line"
+  printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+log_line "Config update gestart." "url=${KIOSK_URL}" "mode=${KIOSK_MODE}" "selected=${SELECTED_PRESET_URL}"
+
 cat > "$KIOSK_CONF" <<EOF
 # ==========================================
 # Kiosk configuratiebestand
@@ -29,6 +46,7 @@ KioskMode=${KIOSK_MODE}
 SelectedPresetUrl=${SELECTED_PRESET_URL}
 SequenceKey=${SEQUENCE_KEY}
 ResolvedPresetUrl=${RESOLVED_PRESET_URL}
+SequenceData=
 Timezone=${TIMEZONE}
 
 # Google Slides opties
@@ -55,4 +73,9 @@ else
   echo "#StopTime=18:00" >> "$KIOSK_CONF"
 fi
 
-systemctl restart kiosk.service
+if "${APPLY_SCRIPT}" --from-config --reason kiosk-update; then
+  log_line "Runtime apply gelukt." "url=${KIOSK_URL}"
+else
+  log_line "Runtime apply mislukte, kiosk restart als fallback." "url=${KIOSK_URL}"
+  systemctl restart kiosk.service
+fi

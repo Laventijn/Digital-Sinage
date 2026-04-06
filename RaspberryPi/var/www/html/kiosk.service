@@ -5,7 +5,7 @@ After=graphical.target display-manager.service
 [Service]
 EnvironmentFile=/etc/default/kiosk.conf
 ExecStartPre=/usr/bin/xdotool mousemove 1919 1079
-ExecStart=/usr/bin/chromium-browser   --kiosk "${KioskURL}"   --incognito   --disable-features=CookiesWithoutSameSiteMustBeSecure   --disable-background-networking   --disable-default-apps   --disable-sync   --disable-translate   --disable-popup-blocking   --disable-component-update   --disable-client-side-phishing-detection   --disable-hang-monitor   --disable-prompt-on-repost   --disable-session-crashed-bubble   --disable-infobars   --no-first-run   --noerrdialogs
+ExecStart=/usr/bin/chromium-browser   --kiosk "${KioskURL}"   --incognito   --remote-debugging-address=127.0.0.1   --remote-debugging-port=9222   --disable-features=CookiesWithoutSameSiteMustBeSecure   --disable-background-networking   --disable-default-apps   --disable-sync   --disable-translate   --disable-popup-blocking   --disable-component-update   --disable-client-side-phishing-detection   --disable-hang-monitor   --disable-prompt-on-repost   --disable-session-crashed-bubble   --disable-infobars   --no-first-run   --noerrdialogs
 
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/pi/.Xauthority"

@@ -39,6 +39,48 @@ body {
   color: var(--text);
 }
 
+body,
+.header,
+.title,
+.badge,
+.section-title,
+.subsection-title,
+.small,
+.helper,
+label,
+button,
+.ghost,
+.primary-btn,
+.wizard-step,
+.preset-mode-btn,
+.sequence-item-row,
+.sequence-item-main,
+.sequence-item-actions,
+.status-pill,
+.stat-card,
+.action-box,
+.summary-card,
+.preview-card,
+.kiosk-cell,
+.kiosk-warning {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+select,
+textarea,
+code,
+pre,
+#editorFinalUrl,
+#summaryUrl,
+#previewUrl,
+#previewUrlTop,
+.kiosk-cell-body code {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .header {
   padding: 26px 20px 18px;
   border-bottom: 1px solid rgba(255,255,255,.06);

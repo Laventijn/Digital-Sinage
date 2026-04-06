@@ -1,6 +1,46 @@
 <?php
 declare(strict_types=1);
 
+if (!defined('KIOSK_RUNTIME_LOG_FILE')) {
+    define('KIOSK_RUNTIME_LOG_FILE', '/home/pi/kiosk-runtime.log');
+}
+
+function kioskLogContextLine(array $context): string {
+    if ($context === []) {
+        return '';
+    }
+
+    $parts = [];
+    foreach ($context as $key => $value) {
+        if (is_bool($value)) {
+            $value = $value ? 'true' : 'false';
+        } elseif (is_array($value) || is_object($value)) {
+            $encoded = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $value = $encoded === false ? '[unserializable]' : $encoded;
+        }
+
+        $parts[] = trim((string)$key) . '=' . trim((string)$value);
+    }
+
+    return implode(' ', $parts);
+}
+
+function kioskLog(string $component, string $message, array $context = []): void {
+    $line = sprintf(
+        "[%s] [%s] %s",
+        date('Y-m-d H:i:s'),
+        trim($component) !== '' ? trim($component) : 'runtime',
+        trim($message)
+    );
+
+    $contextLine = kioskLogContextLine($context);
+    if ($contextLine !== '') {
+        $line .= ' ' . $contextLine;
+    }
+
+    @error_log($line . PHP_EOL, 3, KIOSK_RUNTIME_LOG_FILE);
+}
+
 function looksLikeGoogleSlides(string $url): bool {
     return (bool)preg_match('~^https?://docs\.google\.com/presentation/d/[a-zA-Z0-9_-]+~i', trim($url));
 }
@@ -265,6 +305,57 @@ function savePresets(string $file, array $presets): bool {
     return @file_put_contents($file, $json . PHP_EOL) !== false;
 }
 
+function syncPresetSequenceItems(array &$presets, string $presetUrl, array $sequenceItems): bool {
+    $index = findPresetIndexByUrl($presets, $presetUrl);
+    if ($index < 0 || !isset($presets[$index]) || !is_array($presets[$index])) {
+        return false;
+    }
+
+    $presets[$index]['sequence'] = normalizeSequenceItems($sequenceItems);
+    return true;
+}
+
+function rewritePresetSequenceReferences(array &$presets, string $oldUrl, string $newUrl = ''): bool {
+    $oldUrl = trim($oldUrl);
+    $newUrl = trim($newUrl);
+    if ($oldUrl === '') {
+        return false;
+    }
+
+    $changed = false;
+
+    foreach ($presets as $index => $preset) {
+        if (!is_array($preset)) {
+            continue;
+        }
+
+        $existingSequence = normalizeSequenceItems($preset['sequence'] ?? []);
+        $updatedSequence = [];
+        $sequenceChanged = false;
+
+        foreach ($existingSequence as $item) {
+            if (urlsReferToSamePreset((string)($item['preset_url'] ?? ''), $oldUrl)) {
+                $sequenceChanged = true;
+                $changed = true;
+
+                if ($newUrl === '') {
+                    continue;
+                }
+
+                $item['preset_url'] = $newUrl;
+            }
+
+            $updatedSequence[] = $item;
+        }
+
+        if ($sequenceChanged) {
+            $presets[$index]['sequence'] = $updatedSequence;
+        }
+    }
+
+    return $changed;
+}
+
 function findPresetIndexByUrl(array $presets, string $url): int {
     foreach ($presets as $index => $preset) {
         $presetUrl = trim((string)($preset['url'] ?? ''));
@@ -347,13 +438,6 @@ function configStringToBool(string $value, bool $default = true): bool {
         'false', '0', 'no', 'off' => false,
         default => $default,
     };
-}
-
-function formatConfigFloat(float $value, int $precision = 4): string {
-    $formatted = number_format($value, $precision, '.', '');
-    $formatted = rtrim(rtrim($formatted, '0'), '.');
-
-    return $formatted !== '' ? $formatted : '0';
 }
 
 function loadKioskConfig(string $file, array $defaults): array {
@@ -458,7 +542,7 @@ function loadKioskConfig(string $file, array $defaults): array {
 
             case 'CacheInterval':
                 if (is_numeric($value)) {
-                    $config['cache_hours'] = (float)$value;
+                    $config['cache_hours'] = (int)$value;
                 }
                 break;
 
@@ -509,7 +593,7 @@ function writeKioskConfig(string $file, array $cfg): bool {
     $lines[] = '';
     $lines[] = '# Refresh instellingen';
     $lines[] = 'RefreshTime=' . (int)($cfg['refresh_seconds'] ?? 30);
-    $lines[] = 'CacheInterval=' . formatConfigFloat(max(0.0, (float)($cfg['cache_hours'] ?? 2.0)));
+    $lines[] = 'CacheInterval=' . (int)($cfg['cache_hours'] ?? 2);
     $lines[] = '';
     $lines[] = '# Tijdschema (optioneel)';
     $lines[] = trim((string)($cfg['on_time'] ?? '')) !== '' ? 'StartTime=' . trim((string)$cfg['on_time']) : '#StartTime=08:00';
@@ -557,6 +641,28 @@ function timeInRange(string $start, string $stop, DateTimeInterface|string|null 
     }
 
     return $currentMinutes >= $startMinutes || $currentMinutes < $stopMinutes;
+}
+
+function hasOperatingSchedule(array $config): bool {
+    $start = trim((string)($config['on_time'] ?? ''));
+    $stop = trim((string)($config['off_time'] ?? ''));
+
+    return preg_match('/^\d{2}:\d{2}$/', $start) === 1
+        && preg_match('/^\d{2}:\d{2}$/', $stop) === 1
+        && $start !== $stop;
+}
+
+function isWithinOperatingSchedule(array $config, DateTimeInterface|string|null $now = null): bool {
+    if (!hasOperatingSchedule($config)) {
+        return true;
+    }
+
+    return timeInRange(
+        trim((string)($config['on_time'] ?? '')),
+        trim((string)($config['off_time'] ?? '')),
+        $now,
+        normalizeTimezoneName((string)($config['timezone'] ?? detectSystemTimezone()))
+    );
 }
 
 function resolveActiveSequenceSlot(array $sequenceItems, DateTimeInterface|string|null $now = null, ?string $timezone = null): ?array {
