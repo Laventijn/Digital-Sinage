@@ -1,0 +1,260 @@
+diff --git a/RaspberryPi/home/pi/Digital-Sinage/index.php b/RaspberryPi/home/pi/Digital-Sinage/index.php
+index d1c4831..d6df846 100644
+--- a/RaspberryPi/home/pi/Digital-Sinage/index.php
++++ b/RaspberryPi/home/pi/Digital-Sinage/index.php
+@@ -31,22 +31,30 @@ function sh(string $cmd): string {
+ 
+ function badgeClass(string $status): string {
+     $status = strtolower(trim($status));
+-    return match ($status) {
+-        'active', 'running', 'up', 'ok' => 'ok',
+-        'inactive', 'failed', 'down', 'error' => 'bad',
+-        default => 'warn',
+-    };
++    if (in_array($status, ['active', 'running', 'up', 'ok'], true)) {
++        return 'ok';
++    }
++
++    if (in_array($status, ['inactive', 'failed', 'down', 'error'], true)) {
++        return 'bad';
++    }
++
++    return 'warn';
+ }
+ 
+ function badgeText(string $status): string {
+     $status = strtolower(trim($status));
+-    return match ($status) {
+-        'active'   => 'Actief',
+-        'inactive' => 'Inactief',
+-        'failed'   => 'Fout',
+-        'running'  => 'Actief',
+-        default    => $status !== '' ? ucfirst($status) : 'Onbekend',
+-    };
++    switch ($status) {
++        case 'active':
++        case 'running':
++            return 'Actief';
++        case 'inactive':
++            return 'Inactief';
++        case 'failed':
++            return 'Fout';
++        default:
++            return $status !== '' ? ucfirst($status) : 'Onbekend';
++    }
+ }
+ 
+ function boolToString(bool $value): string {
+@@ -55,11 +63,15 @@ function boolToString(bool $value): string {
+ 
+ function stringToBool(string $value, bool $default = true): bool {
+     $value = strtolower(trim($value));
+-    return match ($value) {
+-        'true', '1', 'yes', 'on'  => true,
+-        'false', '0', 'no', 'off' => false,
+-        default                   => $default,
+-    };
++    if (in_array($value, ['true', '1', 'yes', 'on'], true)) {
++        return true;
++    }
++
++    if (in_array($value, ['false', '0', 'no', 'off'], true)) {
++        return false;
++    }
++
++    return $default;
+ }
+ 
+ function looksLikeGoogleSlides(string $url): bool {
+@@ -841,4 +853,4 @@ $refreshBadgeText   = badgeText($refreshStatus);
+ })();
+ </script>
+ </body>
+-</html>
+\ No newline at end of file
++</html>
+diff --git a/RaspberryPi/var/www/html/index.php b/RaspberryPi/var/www/html/index.php
+index 4b8faaf..f30bf27 100644
+--- a/RaspberryPi/var/www/html/index.php
++++ b/RaspberryPi/var/www/html/index.php
+@@ -141,22 +141,30 @@ function applyRuntimeAfterConfigSave(
+ 
+ function badgeClass(string $status): string {
+     $status = strtolower(trim($status));
+-    return match ($status) {
+-        'active', 'running', 'up', 'ok' => 'ok',
+-        'inactive', 'failed', 'down', 'error' => 'bad',
+-        default => 'warn',
+-    };
++    if (in_array($status, ['active', 'running', 'up', 'ok'], true)) {
++        return 'ok';
++    }
++
++    if (in_array($status, ['inactive', 'failed', 'down', 'error'], true)) {
++        return 'bad';
++    }
++
++    return 'warn';
+ }
+ 
+ function badgeText(string $status): string {
+     $status = strtolower(trim($status));
+-    return match ($status) {
+-        'active'   => 'Actief',
+-        'inactive' => 'Inactief',
+-        'failed'   => 'Fout',
+-        'running'  => 'Actief',
+-        default    => $status !== '' ? ucfirst($status) : 'Onbekend',
+-    };
++    switch ($status) {
++        case 'active':
++        case 'running':
++            return 'Actief';
++        case 'inactive':
++            return 'Inactief';
++        case 'failed':
++            return 'Fout';
++        default:
++            return $status !== '' ? ucfirst($status) : 'Onbekend';
++    }
+ }
+ 
+ function boolToString(bool $value): string {
+@@ -165,11 +173,15 @@ function boolToString(bool $value): string {
+ 
+ function stringToBool(string $value, bool $default = true): bool {
+     $value = strtolower(trim($value));
+-    return match ($value) {
+-        'true', '1', 'yes', 'on'  => true,
+-        'false', '0', 'no', 'off' => false,
+-        default                   => $default,
+-    };
++    if (in_array($value, ['true', '1', 'yes', 'on'], true)) {
++        return true;
++    }
++
++    if (in_array($value, ['false', '0', 'no', 'off'], true)) {
++        return false;
++    }
++
++    return $default;
+ }
+ require_once __DIR__ . '/kiosk_runtime_helpers.php';
+ 
+@@ -798,11 +810,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                                     $CMD_SEQUENCE_ONCE
+                                 );
+                                 if ((bool)($runtimeApply['ok'] ?? false)) {
+-                                    $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
+-                                        'restart' => 'Configuratie opgeslagen. Directe wissel mislukte, kiosk is herstart om de nieuwe inhoud toe te passen.',
+-                                        'deferred' => 'Configuratie opgeslagen. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
+-                                        default => 'Configuratie opgeslagen. Nieuwe inhoud is toegepast.',
+-                                    };
++                                    $runtimeStrategy = (string)($runtimeApply['strategy'] ?? '');
++                                    if ($runtimeStrategy === 'restart') {
++                                        $notice = 'Configuratie opgeslagen. Directe wissel mislukte, kiosk is herstart om de nieuwe inhoud toe te passen.';
++                                    } elseif ($runtimeStrategy === 'deferred') {
++                                        $notice = 'Configuratie opgeslagen. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.';
++                                    } else {
++                                        $notice = 'Configuratie opgeslagen. Nieuwe inhoud is toegepast.';
++                                    }
+                                 } else {
+                                     $error = 'Configuratie opgeslagen, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
+                                 }
+@@ -947,11 +962,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                                     if (!(bool)($runtimeApply['ok'] ?? false)) {
+                                         $error = 'Preset gewijzigd, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
+                                     } elseif ($notice === '') {
+-                                        $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
+-                                            'restart' => 'Preset gewijzigd. De kiosk is herstart om de wijziging toe te passen.',
+-                                            'deferred' => 'Preset gewijzigd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
+-                                            default => 'Preset gewijzigd en direct toegepast.',
+-                                        };
++                                        $runtimeStrategy = (string)($runtimeApply['strategy'] ?? '');
++                                        if ($runtimeStrategy === 'restart') {
++                                            $notice = 'Preset gewijzigd. De kiosk is herstart om de wijziging toe te passen.';
++                                        } elseif ($runtimeStrategy === 'deferred') {
++                                            $notice = 'Preset gewijzigd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.';
++                                        } else {
++                                            $notice = 'Preset gewijzigd en direct toegepast.';
++                                        }
+                                     }
+                                 }
+                                 kioskLog('dashboard', 'Preset gewijzigd.', ['preset' => (string)$presetPayload['url']]);
+@@ -1040,11 +1058,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                             if (!(bool)($runtimeApply['ok'] ?? false)) {
+                                 $error = 'Preset verwijderd, maar de kiosk kon de nieuwe inhoud niet automatisch laden. Controleer /home/pi/kiosk-runtime.log.';
+                             } else {
+-                                $notice = match ((string)($runtimeApply['strategy'] ?? '')) {
+-                                    'restart' => 'Preset verwijderd. De kiosk is herstart om de wijziging toe te passen.',
+-                                    'deferred' => 'Preset verwijderd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.',
+-                                    default => 'Preset verwijderd en direct toegepast.',
+-                                };
++                                $runtimeStrategy = (string)($runtimeApply['strategy'] ?? '');
++                                if ($runtimeStrategy === 'restart') {
++                                    $notice = 'Preset verwijderd. De kiosk is herstart om de wijziging toe te passen.';
++                                } elseif ($runtimeStrategy === 'deferred') {
++                                    $notice = 'Preset verwijderd. De kiosk staat nu buiten het tijdschema en is direct uitgeschakeld. Op het Pi aan-moment wordt de gekozen preset automatisch getoond.';
++                                } else {
++                                    $notice = 'Preset verwijderd en direct toegepast.';
++                                }
+                             }
+                         }
+ 
+diff --git a/RaspberryPi/var/www/html/kiosk_runtime_helpers.php b/RaspberryPi/var/www/html/kiosk_runtime_helpers.php
+index b4da051..c55553d 100644
+--- a/RaspberryPi/var/www/html/kiosk_runtime_helpers.php
++++ b/RaspberryPi/var/www/html/kiosk_runtime_helpers.php
+@@ -433,11 +433,15 @@ function configBoolToString(bool $value): string {
+ function configStringToBool(string $value, bool $default = true): bool {
+     $value = strtolower(trim($value));
+ 
+-    return match ($value) {
+-        'true', '1', 'yes', 'on' => true,
+-        'false', '0', 'no', 'off' => false,
+-        default => $default,
+-    };
++    if (in_array($value, ['true', '1', 'yes', 'on'], true)) {
++        return true;
++    }
++
++    if (in_array($value, ['false', '0', 'no', 'off'], true)) {
++        return false;
++    }
++
++    return $default;
+ }
+ 
+ function loadKioskConfig(string $file, array $defaults): array {
+diff --git a/RaspberryPi/var/www/html/sequence.php b/RaspberryPi/var/www/html/sequence.php
+index ae15983..c5e40d9 100644
+--- a/RaspberryPi/var/www/html/sequence.php
++++ b/RaspberryPi/var/www/html/sequence.php
+@@ -72,12 +72,21 @@ $activeSlotSummary = is_array($runtime)
+ $nextSlotSummary = is_array($runtime)
+     ? formatSequenceSlotSummary(is_array($runtime['next_slot'] ?? null) ? $runtime['next_slot'] : null, $presets)
+     : '';
+-$statusLabel = match ((string)($runtime['status'] ?? 'missing')) {
+-    'active' => 'Actieve override',
+-    'fallback' => 'Hoofdpreset actief',
+-    'base' => 'Geen overrides',
+-    default => 'Geen doel gevonden',
+-};
++$statusValue = (string)($runtime['status'] ?? 'missing');
++switch ($statusValue) {
++    case 'active':
++        $statusLabel = 'Actieve override';
++        break;
++    case 'fallback':
++        $statusLabel = 'Hoofdpreset actief';
++        break;
++    case 'base':
++        $statusLabel = 'Geen overrides';
++        break;
++    default:
++        $statusLabel = 'Geen doel gevonden';
++        break;
++}
+ ?>
+ <!doctype html>
+ <html lang="nl">
